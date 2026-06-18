@@ -357,6 +357,37 @@ def draw_overlay(
                     cv2.FONT_HERSHEY_SIMPLEX, 0.44,
                     config.COLOR_LANDMARK, 1, cv2.LINE_AA)
 
+    # ── 5b. Fitted lumbar curve + L5(est) dot ────────────────────────────
+    if getattr(r, "estimated_l5", None) is not None:
+        el5 = _to_int(r.estimated_l5)
+
+        # Fitted quadratic curve from apex_L to L5(est): drawn as a polyline so
+        # the viewer can confirm it follows the lordotic arc, not the buttock slope.
+        fit_curve = getattr(r, "lumbar_fit_curve", None)
+        if fit_curve is not None and len(fit_curve) > 1:
+            pts_curve = fit_curve.astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(img, [pts_curve], False,
+                          config.COLOR_L5_EST, 1, cv2.LINE_AA)
+        elif r.ep_lumbar_upper is not None:
+            # Fallback: straight line when curve unavailable
+            cv2.line(img, _to_int(r.ep_lumbar_upper), el5,
+                     config.COLOR_L5_EST, 1, cv2.LINE_AA)
+
+        # Corrected T4 tangent + normal at ep_lumbar_lower (= estimated_l5 / virtual_B)
+        if r.T4 is not None and r.ep_lumbar_lower is not None:
+            _draw_endpoint(img, np.array(r.ep_lumbar_lower, float),
+                           r.T4, config.COLOR_L5_EST,
+                           tang_half, normal_half, dot_radius=4)
+
+        # Yellow dot + label on top
+        cv2.circle(img, el5, rad + 2, (20, 20, 20), -1, cv2.LINE_AA)
+        cv2.circle(img, el5, rad + 1, config.COLOR_L5_EST, -1, cv2.LINE_AA)
+        lx, ly = el5[0] + 8, el5[1] - 6
+        cv2.putText(img, "L5(est)", (lx + 1, ly + 1),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (20, 20, 20), 2, cv2.LINE_AA)
+        cv2.putText(img, "L5(est)", (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, config.COLOR_L5_EST, 1, cv2.LINE_AA)
+
     # ── 6. Warnings ───────────────────────────────────────────────────────
     if r.warnings:
         h = img.shape[0]

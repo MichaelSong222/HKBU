@@ -348,3 +348,74 @@ def find_reliable_lumbar_end(
     low_conf = extrap_dist / image_height > config.LUMBAR_EXTRAPOLATION_MAX_FRAC
 
     return idx_reliable_end, low_conf, virtual_B
+
+
+# ─── Estimated L5 position (sagittal-view, hip-landmark method) ───────────────
+
+def estimate_l5_position(
+    back_contour: np.ndarray,
+    shoulder: tuple[float, float],
+    hip: tuple[float, float],
+) -> np.ndarray:
+    """
+    Estimate the L5 anchor point on the dorsal surface using the spine
+    contour's lower-segment direction and the MediaPipe mid-hip landmark.
+
+    This corrects the sagittal-view problem where the buttock protrusion pulls
+    the contour endpoint posteriorly and inferiorly, away from the actual L5.
+    The returned point is used as the anchor for the quadratic tangent fit in
+    compute_angles; it stays on the dorsal surface (no body-interior offset)
+    so the fit is not pulled outside the contour's x-range.
+
+    Algorithm
+    ---------
+    a) SVD direction fit on the last 1/L5_TAIL_FIT_RATIO points of the contour
+       to get a clean "lower-spine axis" direction, unaffected by buttock curvature.
+    b) Target y = mid_hip_y − L5_ABOVE_HIP_FRAC * torso_height
+       (L5 sits slightly above the hip centre).
+    c) Extrapolate along the spine axis from the contour tail to target_y.
+
+    Parameters
+    ----------
+    back_contour : (N, 2) ndarray, ordered top → bottom (same as pipeline usage)
+    shoulder     : (x, y) pixel coords of the mid-shoulder landmark
+    hip          : (x, y) pixel coords of the mid-hip landmark
+
+    Returns
+    -------
+    (2,) float32 ndarray — estimated L5 pixel position
+    """
+    n = len(back_contour)
+
+    # ── a. SVD fit on the tail segment ───────────────────────────────────
+    tail_len = max(4, n // config.L5_TAIL_FIT_RATIO)
+    tail = back_contour[-tail_len:].astype(np.float64)
+    centroid = tail.mean(axis=0)
+    _, _, Vt = np.linalg.svd(tail - centroid)
+    # First right-singular vector = principal direction of the tail segment.
+    # Ensure it points downward (positive y) so extrapolation goes toward L5.
+    axis = Vt[0]
+    if axis[1] < 0:
+        axis = -axis
+
+    # ── b. Target y coordinate ────────────────────────────────────────────
+    torso_h = float(hip[1] - shoulder[1])
+    target_y = float(hip[1]) - config.L5_ABOVE_HIP_FRAC * torso_h
+
+    # ── c. Extrapolate along spine axis to target_y ───────────────────────
+    # Starting from the tail centroid, walk along `axis` until y = target_y.
+    # axis[1] is the y-component; guard against near-horizontal axes.
+    if abs(axis[1]) < 1e-6:
+        # Degenerate: axis is nearly horizontal; fall back to last contour point
+        raw_pt = back_contour[-1].astype(np.float64)
+        raw_pt[1] = target_y
+    else:
+        t = (target_y - centroid[1]) / axis[1]
+        raw_pt = centroid + t * axis
+
+    # No ventral offset: the extrapolated point stays on the dorsal surface
+    # (same side as the back contour).  Shifting it toward the body interior
+    # would pull it rightward past the contour's x-range and corrupt the
+    # quadratic tangent fit in compute_angles.  The tangent direction is what
+    # matters for the angle computation; vertebral-body offset is not needed.
+    return raw_pt.astype(np.float32)

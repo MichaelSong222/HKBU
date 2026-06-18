@@ -144,6 +144,7 @@ def compute_angles(
     idx_apex_L: int,
     idx_reliable_lumbar_end: int,
     virtual_B: np.ndarray | None,
+    estimated_l5: np.ndarray | None = None,
 ) -> dict:
     """
     Compute thoracic kyphosis angle X and lumbar lordosis angle Y using the
@@ -201,6 +202,8 @@ def compute_angles(
 
     # ── 4. Lumbar lower endpoint: apex_L → reliable_B (or virtual_B) ─────
     lumbar_lower_extrapolated = False
+    lumbar_fit_curve = None   # (N,2) fitted curve from apex_L to L5(est), or None
+    lumbar_clean_seg = None   # (M,2) the clean contour prefix actually used for fitting
     if virtual_B is not None:
         # Build a two-point synthetic segment from apex_L to virtual_B and walk
         # the fraction along that.  We snap to the reliable end for the tangent.
@@ -215,6 +218,47 @@ def compute_angles(
         # Build a synthetic contour segment for the tangent: reliable end + virtual_B
         _synth = np.vstack([reliable_pt, virtual_B])
         T4 = _fit_tangent_at(_synth, 0, half_window=1)
+        # Override T4 direction when estimated_l5 is available:
+        # Fit a quadratic x = f(y) through a CLEAN prefix of contour[apex_L..reliable_end]
+        # (first L5_FIT_CLEAN_FRAC of that segment) + estimated_l5.
+        # Using only the clean prefix avoids the buttock-contaminated tail which
+        # inflates the slope.  A sanity check rejects fits where the derived
+        # tangent tilts more than L5_TANGENT_MAX_FROM_VERTICAL degrees from vertical.
+        if estimated_l5 is not None:
+            full_seg = contour[idx_apex_L : idx_reliable_lumbar_end + 1]
+            clean_len = max(3, int(len(full_seg) * config.L5_FIT_CLEAN_FRAC))
+            clean_seg = full_seg[:clean_len].astype(np.float64)
+            lumbar_clean_seg = clean_seg.astype(np.float32)   # store for visualization
+            extra = estimated_l5.astype(np.float64).reshape(1, 2)
+            pts = np.vstack([clean_seg, extra])
+            ys = pts[:, 1]
+            xs = pts[:, 0]
+            fit_ok = False
+            if np.ptp(ys) > 1.0 and len(pts) >= 3:
+                coeffs = np.polyfit(ys, xs, 2)   # x = a*y^2 + b*y + c
+                dxdy = np.polyval(np.polyder(coeffs), float(estimated_l5[1]))
+                vec = np.array([dxdy, 1.0])
+                norm_v = np.linalg.norm(vec)
+                if norm_v > 1e-6:
+                    candidate = (vec / norm_v).astype(np.float32)
+                    # Sanity check: angle from vertical = arctan(|dx/dy|)
+                    angle_from_vert = math.degrees(math.atan(abs(dxdy)))
+                    if angle_from_vert <= config.L5_TANGENT_MAX_FROM_VERTICAL:
+                        T4 = candidate
+                        fit_ok = True
+                    # else: fall through to chord fallback below
+                # Sample the fitted curve for visualization (always, for debugging)
+                y_samples = np.linspace(ys[0], ys[-1], max(20, len(pts)))
+                x_samples = np.polyval(coeffs, y_samples)
+                lumbar_fit_curve = np.column_stack([x_samples, y_samples]).astype(np.float32)
+            if not fit_ok:
+                # Fallback: apex_L → estimated_l5 chord direction
+                p_lu = contour[idx_apex_L].astype(float)
+                p_l5 = estimated_l5.astype(float)
+                chord = p_l5 - p_lu
+                chord_n = np.linalg.norm(chord)
+                if chord_n > 1e-6:
+                    T4 = (chord / chord_n).astype(np.float32)
     else:
         t4_idx = _arc_length_index(
             contour, idx_apex_L, idx_reliable_lumbar_end, config.LUMBAR_LOWER_FRAC
@@ -246,6 +290,10 @@ def compute_angles(
         "ep_lumbar_lower":   (virtual_B if lumbar_lower_extrapolated
                               else contour[t4_idx]),
         "lumbar_lower_extrapolated": lumbar_lower_extrapolated,
+        # Fitted lumbar curve (apex_L → L5(est)), None when not available
+        "lumbar_fit_curve":  lumbar_fit_curve,
+        # Clean contour prefix used as fitting input, None when not available
+        "lumbar_clean_seg":  lumbar_clean_seg,
     }
 
 

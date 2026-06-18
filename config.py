@@ -91,6 +91,38 @@ BUTTOCK_SLOPE_CHANGE_THRESHOLD = 0.8   # Δx/Δy
 # this fraction, the lumbar lower tangent is flagged LOW CONFIDENCE.
 LUMBAR_EXTRAPOLATION_MAX_FRAC = 0.12
 
+# ─── Estimated L5 position (sagittal-view hip-landmark method) ───────────────
+# Master switch: set False to revert entirely to the contour slope-extrapolation
+# method (virtual_B) and ignore all parameters below.
+USE_ESTIMATED_L5 = True
+
+# Minimum MediaPipe visibility score for each hip landmark to be considered
+# reliable enough to use the estimation.  Below this → fallback to virtual_B.
+L5_HIP_VISIBILITY_MIN = 0.5
+
+# L5 sits this fraction of torso height ABOVE the mid-hip point.
+# Torso height = hip_y − shoulder_y (pixels).  Sagittal view only — do NOT
+# use left/right hip separation here; in a true side-on shot it is near zero.
+L5_ABOVE_HIP_FRAC = 0.12
+
+# Use the last 1/N of the spine contour points for the SVD direction fit.
+# Larger N = shorter tail segment = tighter local direction estimate.
+# Recommended range 4–8; default 6 uses roughly the last 17% of the curve.
+L5_TAIL_FIT_RATIO = 6
+
+# Fraction of the apex_L → reliable_lumbar_end arc used as clean contour input
+# for the quadratic tangent fit.  Only the first L5_FIT_CLEAN_FRAC of that
+# segment is used, avoiding the buttock-contaminated tail.
+# 0.40 ≈ take the first 40% of apex_L→reliable_end, i.e. roughly the top 1/3
+# of the lumbar curve where the contour is still undeformed.
+L5_FIT_CLEAN_FRAC = 0.40
+
+# Maximum allowed angle (degrees) between the fitted T4 tangent and the vertical
+# Y-axis.  Anatomically L5's endplate is nearly vertical; if the fit yields a
+# steeper tilt the result is likely polluted and we fall back to the apex_L →
+# estimated_l5 chord direction instead.
+L5_TANGENT_MAX_FROM_VERTICAL = 30.0
+
 # ─── Visualization colors (BGR for OpenCV) ───────────────────────────────────
 COLOR_AXIS_LINE     = (160, 160, 160)   # faint grey — Shoulder→Hip reference
 COLOR_CONTOUR       = (  0, 210,  80)   # green — spine curve A→B
@@ -99,6 +131,7 @@ COLOR_LUMBAR        = ( 30, 150, 255)   # orange — lumbar tangents/arc/label
 COLOR_LANDMARK      = (255, 255, 255)   # white dots for all spine landmarks
 COLOR_LANDMARK_OUTLINE = (30, 30, 30)   # thin dark outline on landmark dots
 COLOR_WARNING_TEXT  = (  0,  60, 220)   # red warning text
+COLOR_L5_EST        = (  0, 220, 255)   # yellow — estimated L5 landmark dot
 
 # ─── Camera / GUI ─────────────────────────────────────────────────────────────
 COUNTDOWN_SECONDS   = 5

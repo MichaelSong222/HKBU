@@ -28,6 +28,7 @@ from spine.contour_analysis import (
     find_anatomical_markers,
     find_reliable_lumbar_end,
     smooth_back_contour,
+    estimate_l5_position,
 )
 from spine.angles import compute_angles, classify_thoracic, classify_lumbar
 
@@ -44,6 +45,7 @@ class AnalysisResult:
     hip:      Optional[tuple[float, float]] = None
     vertical_deviation_deg: float = 0.0
     is_vertical: bool = True
+    _raw_landmarks: object = field(default=None, repr=False)  # MediaPipe landmark list
 
     # ── Contour ───────────────────────────────────────────────────────────
     back_contour: Optional[np.ndarray] = None   # (N,2) ordered top→bottom
@@ -64,6 +66,10 @@ class AnalysisResult:
     idx_reliable_lumbar_end: int = 0
     virtual_B: Optional[np.ndarray] = None      # extrapolated lower end if occluded
 
+    # ── Estimated L5 (hip-landmark SVD method) ────────────────────────────
+    estimated_l5: Optional[np.ndarray] = None   # None if feature off or fallback used
+    estimated_l5_used: bool = False             # True when this point replaced virtual_B
+
     # ── Tangent vectors (unit 2-D) ────────────────────────────────────────
     T1: Optional[np.ndarray] = None             # upper thoracic tangent
     T2: Optional[np.ndarray] = None             # lower thoracic tangent
@@ -80,6 +86,7 @@ class AnalysisResult:
     ep_lumbar_upper:   Optional[np.ndarray] = None   # ~L2
     ep_lumbar_lower:   Optional[np.ndarray] = None   # ~L5
     lumbar_lower_extrapolated: bool = False
+    lumbar_fit_curve: Optional[np.ndarray] = None    # (N,2) fitted curve apex_L→L5(est)
 
     # ── Angles & classification ────────────────────────────────────────────
     thoracic_angle_deg: Optional[float] = None
@@ -124,6 +131,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
     result.hip      = pose["hip"]
     result.vertical_deviation_deg = pose["vertical_deviation_deg"]
     result.is_vertical = pose["is_vertical"]
+    result._raw_landmarks = pose["raw_landmarks"]
 
     if not result.is_vertical:
         result.low_confidence = True
@@ -212,6 +220,36 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             "Lumbar angle LOW CONFIDENCE — extrapolation distance too large."
         )
 
+    # ── Step 5b: Estimated L5 (hip-landmark SVD method) ──────────────────
+    # Only runs when USE_ESTIMATED_L5 is True and both hip landmarks are
+    # visible enough.  On success, estimated_l5 overrides virtual_B for the
+    # angle computation below.  The original virtual_B path (slope-based) is
+    # preserved byte-for-byte above and used as the fallback.
+    if config.USE_ESTIMATED_L5 and result._raw_landmarks is not None:
+        import mediapipe as mp
+        _mp_pose = mp.solutions.pose
+        lms = result._raw_landmarks
+        lh = lms[_mp_pose.PoseLandmark.LEFT_HIP]
+        rh = lms[_mp_pose.PoseLandmark.RIGHT_HIP]
+        hips_visible = (
+            lh.visibility >= config.L5_HIP_VISIBILITY_MIN
+            or rh.visibility >= config.L5_HIP_VISIBILITY_MIN
+        )
+        if hips_visible:
+            try:
+                est = estimate_l5_position(
+                    contour,
+                    shoulder=result.shoulder,
+                    hip=result.hip,
+                )
+                result.estimated_l5 = est
+                result.estimated_l5_used = True
+                # Replace virtual_B with the estimated point so compute_angles
+                # uses it for T4 / ep_lumbar_lower.
+                virtual_B = est
+            except Exception as e:
+                result.warnings.append(f"L5 estimation failed, using fallback: {e}")
+
     # ── Step 6: Angles ────────────────────────────────────────────────────
     try:
         angle_data = compute_angles(
@@ -223,6 +261,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             idx_apex_L=result.idx_apex_L,
             idx_reliable_lumbar_end=idx_rel_end,
             virtual_B=virtual_B,
+            estimated_l5=result.estimated_l5,
         )
     except Exception as e:
         result.success = False
@@ -244,6 +283,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
     result.ep_lumbar_upper   = angle_data["ep_lumbar_upper"]
     result.ep_lumbar_lower   = angle_data["ep_lumbar_lower"]
     result.lumbar_lower_extrapolated = angle_data["lumbar_lower_extrapolated"]
+    result.lumbar_fit_curve  = angle_data["lumbar_fit_curve"]
 
     # ── Step 7: Classification ─────────────────────────────────────────────
     th_key, th_label = classify_thoracic(result.thoracic_angle_deg)
