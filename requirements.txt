@@ -1,0 +1,22 @@
+# Spine Posture Analyzer — pinned dependencies
+# Tested on Python 3.11 / macOS (Apple Silicon & Intel)
+# Install: pip install -r requirements.txt
+
+# ── Core vision ───────────────────────────────────────────────────────────────
+mediapipe==0.10.14
+opencv-python==4.10.0.84
+numpy==1.26.4
+
+# ── Scientific / signal processing ───────────────────────────────────────────
+scipy==1.13.1
+
+# ── Image I/O ─────────────────────────────────────────────────────────────────
+Pillow==10.4.0
+
+# ── GUI ───────────────────────────────────────────────────────────────────────
+# PySide6 chosen over PyQt5: LGPL license, actively maintained Qt6 bindings,
+# better macOS native rendering, and included in the official Qt ecosystem.
+PySide6==6.7.2
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.2
