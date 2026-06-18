@@ -33,6 +33,11 @@ LUMBAR_LABELS = {
 # before the result is flagged LOW CONFIDENCE.
 VERTICAL_DEVIATION_THRESHOLD_DEG = 8.0
 
+# ─── Contour smoothing ───────────────────────────────────────────────────────
+# B-spline smoothing applied to the back contour after extraction, before angle
+# computation. Larger values = smoother curve. Set to 0 to disable smoothing entirely.
+CONTOUR_SMOOTH_FACTOR = 50.0
+
 # ─── Contour extraction ───────────────────────────────────────────────────────
 # Fraction of image width to keep when cropping the torso column for contour
 TORSO_X_MARGIN = 0.05

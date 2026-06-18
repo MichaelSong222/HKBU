@@ -27,6 +27,7 @@ from spine.contour_analysis import (
     find_ab_endpoints,
     find_anatomical_markers,
     find_reliable_lumbar_end,
+    smooth_back_contour,
 )
 from spine.angles import compute_angles, classify_thoracic, classify_lumbar
 
@@ -140,6 +141,8 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             hip_y=result.hip[1],
         )
         contour = smooth_contour(raw_contour, window=9)
+        if config.CONTOUR_SMOOTH_FACTOR > 0:
+            contour = smooth_back_contour(contour, smooth_factor=config.CONTOUR_SMOOTH_FACTOR)
     except SegmentationError as e:
         result.success = False
         result.error = str(e)

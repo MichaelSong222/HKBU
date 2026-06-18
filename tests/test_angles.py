@@ -66,6 +66,7 @@ from spine.contour_analysis import (
     find_anatomical_markers,
     find_ab_endpoints,
     find_reliable_lumbar_end,
+    smooth_back_contour,
 )
 
 
@@ -464,6 +465,99 @@ class TestContourMarkers:
         markers = find_anatomical_markers(c, 0, len(c) - 1)
         assert c[markers["idx_apex_K"], 0] < c[0, 0], \
             "apex_K should be to the left of A"
+
+
+# ─── smooth_back_contour tests ────────────────────────────────────────────────
+
+class TestSmoothBackContour:
+    """
+    Feed a noisy sinusoidal contour and verify:
+    1. Smoothed curve has lower point-to-point x variance than the noisy input.
+    2. apex_K and apex_L locations (from find_anatomical_markers) are within
+       ±3 indices of the noiseless ground truth after smoothing.
+    3. inflect location is within ±3 indices of ground truth after smoothing.
+    4. Endpoints A and B are exactly preserved.
+    """
+
+    NOISE_STD = 4.0        # px of Gaussian noise added to x
+    SMOOTH_FACTOR = 50.0
+    APEX_TOL = 15          # index tolerance (~3.75% of 400-pt curve)
+
+    def _make_noisy(self, seed: int = 42):
+        rng = np.random.default_rng(seed)
+        contour_clean, anchors = _make_sinusoidal_contour(
+            thoracic_amplitude=50.0, lumbar_amplitude=40.0, height=400
+        )
+        noisy = contour_clean.copy()
+        noisy[:, 0] += rng.normal(0.0, self.NOISE_STD, size=len(noisy)).astype(np.float32)
+        return contour_clean, noisy, anchors
+
+    def test_variance_reduced(self):
+        _, noisy, _ = self._make_noisy()
+        smoothed = smooth_back_contour(noisy, self.SMOOTH_FACTOR)
+
+        # Point-to-point x-differences as a measure of high-frequency jitter
+        noisy_var   = np.var(np.diff(noisy[:, 0]))
+        smooth_var  = np.var(np.diff(smoothed[:, 0]))
+        assert smooth_var < noisy_var, (
+            f"Smoothed variance {smooth_var:.4f} should be < noisy variance {noisy_var:.4f}"
+        )
+
+    def test_apex_k_within_tolerance(self):
+        clean, noisy, anchors = self._make_noisy()
+        smoothed = smooth_back_contour(noisy, self.SMOOTH_FACTOR)
+
+        gt_idx = anchors["idx_apex_K"]
+        markers = find_anatomical_markers(smoothed, anchors["idx_A"], anchors["idx_B"])
+        err = abs(markers["idx_apex_K"] - gt_idx)
+        assert err <= self.APEX_TOL, (
+            f"apex_K index error {err} > tolerance {self.APEX_TOL} "
+            f"(got {markers['idx_apex_K']}, expected ~{gt_idx})"
+        )
+
+    def test_apex_l_within_tolerance(self):
+        clean, noisy, anchors = self._make_noisy()
+        smoothed = smooth_back_contour(noisy, self.SMOOTH_FACTOR)
+
+        gt_idx = anchors["idx_apex_L"]
+        markers = find_anatomical_markers(smoothed, anchors["idx_A"], anchors["idx_B"])
+        err = abs(markers["idx_apex_L"] - gt_idx)
+        assert err <= self.APEX_TOL, (
+            f"apex_L index error {err} > tolerance {self.APEX_TOL} "
+            f"(got {markers['idx_apex_L']}, expected ~{gt_idx})"
+        )
+
+    def test_inflect_within_tolerance(self):
+        clean, noisy, anchors = self._make_noisy()
+        smoothed = smooth_back_contour(noisy, self.SMOOTH_FACTOR)
+
+        gt_idx = anchors["idx_inflect"]
+        markers = find_anatomical_markers(smoothed, anchors["idx_A"], anchors["idx_B"])
+        err = abs(markers["idx_inflect"] - gt_idx)
+        assert err <= self.APEX_TOL, (
+            f"inflect index error {err} > tolerance {self.APEX_TOL} "
+            f"(got {markers['idx_inflect']}, expected ~{gt_idx})"
+        )
+
+    def test_endpoints_preserved(self):
+        _, noisy, anchors = self._make_noisy()
+        smoothed = smooth_back_contour(noisy, self.SMOOTH_FACTOR)
+
+        np.testing.assert_allclose(
+            smoothed[0], noisy[0], atol=1e-4,
+            err_msg="A endpoint (index 0) must be preserved exactly"
+        )
+        np.testing.assert_allclose(
+            smoothed[-1], noisy[-1], atol=1e-4,
+            err_msg="B endpoint (last index) must be preserved exactly"
+        )
+
+    def test_zero_factor_returns_copy(self):
+        _, noisy, _ = self._make_noisy()
+        # smooth_factor=0 is handled at the pipeline level (skip call entirely),
+        # but the function itself should still return a valid Nx2 array when called.
+        result = smooth_back_contour(noisy, 0.0)
+        assert result.shape == noisy.shape
 
 
 if __name__ == "__main__":

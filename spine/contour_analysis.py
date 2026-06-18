@@ -19,8 +19,54 @@ Key outputs:
 
 import numpy as np
 from scipy.signal import savgol_filter
+from scipy.interpolate import UnivariateSpline
 
 import config
+
+
+# ─── Contour smoothing ────────────────────────────────────────────────────────
+
+def smooth_back_contour(contour: np.ndarray, smooth_factor: float) -> np.ndarray:
+    """
+    Smooth the back contour using a cubic UnivariateSpline: x = f(y).
+    - contour: Nx2 array of [x, y] points along the back curve, ordered A -> B
+    - smooth_factor: scales the spline's s= parameter as s = N * smooth_factor;
+      larger = smoother. 0 leaves the contour unchanged.
+    Returns a smoothed Nx2 contour with the same number of points.
+    Endpoints are re-pinned to the original A and B to prevent drift.
+
+    UnivariateSpline is used instead of splprep because the back contour has
+    monotone y (one point per image row), making x = f(y) well-posed. splprep
+    treats x and y as equal parametric components: on a nearly-vertical contour
+    the large y-variation consumes the s= budget, leaving x unregulated and
+    producing oscillations rather than smoothing.
+    """
+    n = len(contour)
+    if n < 4 or smooth_factor == 0.0:
+        return contour.copy()
+
+    x = contour[:, 0].astype(np.float64)
+    y = contour[:, 1].astype(np.float64)
+
+    # UnivariateSpline requires strictly increasing knot positions.
+    # Deduplicate rows with the same y (rare but possible at mask boundaries).
+    _, unique_idx = np.unique(y, return_index=True)
+    if len(unique_idx) < 4:
+        return contour.copy()
+    y_u, x_u = y[unique_idx], x[unique_idx]
+
+    try:
+        spl = UnivariateSpline(y_u, x_u, s=n * smooth_factor, k=3)
+    except Exception:
+        return contour.copy()
+
+    x_s = spl(y)
+
+    # Re-anchor endpoints exactly to original A and B
+    x_s[0]  = x[0]
+    x_s[-1] = x[-1]
+
+    return np.column_stack([x_s, y]).astype(np.float32)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
