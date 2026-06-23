@@ -18,6 +18,8 @@ Layout:
 
 import cv2
 import numpy as np
+from datetime import datetime
+from pathlib import Path
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap, QFont
 from PySide6.QtWidgets import (
@@ -29,6 +31,10 @@ from PySide6.QtWidgets import (
 from spine.pipeline import run_analysis, AnalysisResult
 from spine.visualization import draw_overlay
 from gui.camera_widget import CameraWidget
+
+# ─── Capture output directory ────────────────────────────────────────────────
+_CAPTURE_DIR = Path(__file__).parent.parent / "captures"
+_CAPTURE_DIR.mkdir(exist_ok=True)
 
 
 # ─── Worker thread for analysis (keeps GUI responsive) ───────────────────────
@@ -57,6 +63,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Spine Posture Analyzer — Thoracic & Lumbar Estimation")
         self.setMinimumSize(1100, 700)
         self._worker: _AnalysisWorker | None = None
+        self._capture_stem: str | None = None  # set when a live frame is captured
         self._build_ui()
 
     # ── UI construction ───────────────────────────────────────────────────
@@ -165,6 +172,12 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(0)
         self.btn_camera.setChecked(False)
         self._camera_widget.stop_camera()
+
+        # Save original frame
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._capture_stem = ts  # share timestamp with _on_analysis_done
+        cv2.imwrite(str(_CAPTURE_DIR / f"{ts}_original.jpg"), frame)
+
         self._run_analysis(frame)
 
     def _run_analysis(self, image_bgr: np.ndarray):
@@ -183,6 +196,11 @@ class MainWindow(QMainWindow):
     def _on_analysis_done(self, result: AnalysisResult, annotated: np.ndarray):
         self.btn_upload.setEnabled(True)
         self.btn_camera.setEnabled(True)
+
+        # Save annotated image if this came from a live capture
+        if hasattr(self, "_capture_stem") and self._capture_stem:
+            cv2.imwrite(str(_CAPTURE_DIR / f"{self._capture_stem}_annotated.jpg"), annotated)
+            self._capture_stem = None
 
         # Show annotated image
         self._show_image(annotated)

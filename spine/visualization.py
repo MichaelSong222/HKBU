@@ -339,7 +339,7 @@ def draw_overlay(
         (r.shoulder,  "Sho.",   ( 8,  -6)),
         (r.hip,       "Hip",    ( 8,  -6)),
         (r.A,         "A",      (-16, -6)),
-        (r.apex_K,    "T4/T5",  (-50, -6)),
+        (r.apex_K,    "T6/T7",  (-50, -6)),
         (r.inflect,   "T12/L1", (-60, -6)),
         (r.apex_L,    "L3/L4",  (-60, -6)),
         (r.B,         "B",      (-16,  14)),
@@ -387,6 +387,18 @@ def draw_overlay(
                     cv2.FONT_HERSHEY_SIMPLEX, 0.44, (20, 20, 20), 2, cv2.LINE_AA)
         cv2.putText(img, "L5(est)", (lx, ly),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.44, config.COLOR_L5_EST, 1, cv2.LINE_AA)
+
+        # ── Shoulder/hip contour projections (arc-length method debug dots) ──
+        for proj, label in [
+            (getattr(r, "l5_shoulder_proj", None), "Sho.proj"),
+            (getattr(r, "l5_hip_proj",      None), "Hip.proj"),
+        ]:
+            if proj is not None:
+                pp = _to_int(proj)
+                cv2.circle(img, pp, rad + 1, (20, 20, 20), -1, cv2.LINE_AA)
+                cv2.circle(img, pp, rad, (0, 200, 255), -1, cv2.LINE_AA)  # cyan
+                cv2.putText(img, label, (pp[0] + 6, pp[1] - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 200, 255), 1, cv2.LINE_AA)
 
     # ── 6. Warnings ───────────────────────────────────────────────────────
     if r.warnings:

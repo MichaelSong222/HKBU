@@ -74,7 +74,7 @@ TANGENT_LOCAL_HALF_WINDOW = 8
 #            apex_L~L3/L4(3.5 within lumbar, L1=1), B~L5/S1(5.5)
 #
 # Thoracic upper target T2/T3(2.5): |4.5-2.5|/|4.5-1|   = 2.0/3.5 ≈ 0.57
-THORACIC_UPPER_FRAC = 0.57   # from apex_K toward A       -> ~T2/T3
+THORACIC_UPPER_FRAC = 0.82   # from apex_K toward A       -> ~T2/T3
 # Thoracic lower target T10/T11(10.5): |10.5-4.5|/|12.5-4.5| = 6.0/8.0 = 0.75
 THORACIC_LOWER_FRAC = 0.75   # from apex_K toward inflect -> ~T10/T11
 # Lumbar upper target L2: |3.5-2|/|3.5-1|               = 1.5/2.5 = 0.60
@@ -103,7 +103,19 @@ L5_HIP_VISIBILITY_MIN = 0.5
 # L5 sits this fraction of torso height ABOVE the mid-hip point.
 # Torso height = hip_y − shoulder_y (pixels).  Sagittal view only — do NOT
 # use left/right hip separation here; in a true side-on shot it is near zero.
-L5_ABOVE_HIP_FRAC = 0.12
+# NOTE: Used only as fallback when apex_L is unavailable.
+L5_ABOVE_HIP_FRAC = 0.31
+
+# Fraction along the apex_L → hip vector where L5 is placed.
+# 0.62 means 62% of the way from apex_L (L3/L4) toward hip.
+# NOTE: legacy parameter, superseded by L5_SPINE_ARC_FRAC below.
+L5_APEXL_HIP_FRAC = 0.62
+
+# Arc-length fraction of the shoulder→hip spine arc added past apex_L to reach L5.
+# Anatomical basis: shoulder ≈ T2/T3, hip ≈ L4/L5 → ~14 vertebral levels;
+# 1.5 lumbar segments (apex L3/L4 → L5 centre) ÷ 14 ≈ 0.107,
+# scaled up to 0.16 to account for lumbar vertebrae being larger than thoracic.
+L5_SPINE_ARC_FRAC = 0.12
 
 # Use the last 1/N of the spine contour points for the SVD direction fit.
 # Larger N = shorter tail segment = tighter local direction estimate.

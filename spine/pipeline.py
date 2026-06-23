@@ -69,6 +69,8 @@ class AnalysisResult:
     # ── Estimated L5 (hip-landmark SVD method) ────────────────────────────
     estimated_l5: Optional[np.ndarray] = None   # None if feature off or fallback used
     estimated_l5_used: bool = False             # True when this point replaced virtual_B
+    l5_shoulder_proj: Optional[np.ndarray] = None  # contour projection of shoulder landmark
+    l5_hip_proj: Optional[np.ndarray] = None       # contour projection of hip landmark
 
     # ── Tangent vectors (unit 2-D) ────────────────────────────────────────
     T1: Optional[np.ndarray] = None             # upper thoracic tangent
@@ -237,13 +239,17 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
         )
         if hips_visible:
             try:
-                est = estimate_l5_position(
+                est, shoulder_proj, hip_proj = estimate_l5_position(
                     contour,
                     shoulder=result.shoulder,
                     hip=result.hip,
+                    apex_L=result.apex_L,
+                    idx_apex_L=result.idx_apex_L,
                 )
                 result.estimated_l5 = est
                 result.estimated_l5_used = True
+                result.l5_shoulder_proj = shoulder_proj
+                result.l5_hip_proj = hip_proj
                 # Replace virtual_B with the estimated point so compute_angles
                 # uses it for T4 / ep_lumbar_lower.
                 virtual_B = est

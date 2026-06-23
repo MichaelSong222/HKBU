@@ -20,6 +20,7 @@ Key outputs:
 import numpy as np
 from scipy.signal import savgol_filter
 from scipy.interpolate import UnivariateSpline
+from typing import Optional
 
 import config
 
@@ -350,72 +351,105 @@ def find_reliable_lumbar_end(
     return idx_reliable_end, low_conf, virtual_B
 
 
+# ─── Arc-length helpers for L5 estimation ────────────────────────────────────
+
+def _calc_arc_length(contour: np.ndarray, start_idx: int, end_idx: int) -> float:
+    """Sum of Euclidean distances between consecutive contour points [start_idx, end_idx]."""
+    seg = contour[start_idx:end_idx + 1].astype(np.float64)
+    if len(seg) < 2:
+        return 0.0
+    return float(np.sum(np.linalg.norm(np.diff(seg, axis=0), axis=1)))
+
+
+def _contour_point_at_arc(
+    contour: np.ndarray, start_idx: int, target_arc: float
+) -> np.ndarray:
+    """
+    Walk along contour from start_idx, accumulating arc length, and return
+    the interpolated point at exactly target_arc distance.
+    Clamped to the last contour point if target_arc exceeds total arc.
+    """
+    pts = contour[start_idx:].astype(np.float64)
+    accumulated = 0.0
+    for i in range(1, len(pts)):
+        seg_len = float(np.linalg.norm(pts[i] - pts[i - 1]))
+        if accumulated + seg_len >= target_arc:
+            t = (target_arc - accumulated) / seg_len if seg_len > 1e-9 else 0.0
+            return (pts[i - 1] + t * (pts[i] - pts[i - 1])).astype(np.float32)
+        accumulated += seg_len
+    # target_arc exceeded contour — clamp to last point
+    return pts[-1].astype(np.float32)
+
+
 # ─── Estimated L5 position (sagittal-view, hip-landmark method) ───────────────
 
 def estimate_l5_position(
     back_contour: np.ndarray,
     shoulder: tuple[float, float],
     hip: tuple[float, float],
-) -> np.ndarray:
+    apex_L: Optional[np.ndarray] = None,
+    idx_apex_L: int = -1,
+) -> tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
     """
-    Estimate the L5 anchor point on the dorsal surface using the spine
-    contour's lower-segment direction and the MediaPipe mid-hip landmark.
+    Estimate the L5 anchor point on the dorsal surface.
 
-    This corrects the sagittal-view problem where the buttock protrusion pulls
-    the contour endpoint posteriorly and inferiorly, away from the actual L5.
-    The returned point is used as the anchor for the quadratic tangent fit in
-    compute_angles; it stays on the dorsal surface (no body-interior offset)
-    so the fit is not pulled outside the contour's x-range.
+    Primary method (when apex_L and idx_apex_L are provided):
+        1. Project shoulder_y and hip_y onto the contour (nearest-y points).
+        2. Compute spine_arc = arc length from shoulder_proj to hip_proj.
+        3. Compute apex_arc  = arc length from shoulder_proj to apex_L.
+        4. l5_arc = apex_arc + 0.16 * spine_arc  (1.5 lumbar segments ≈ 16%
+           of T3→L4/L5 span; based on: hip ≈ L4/L5, shoulder ≈ T2/T3,
+           that span covers ~14 vertebral levels; 1.5 / 14 ≈ 0.107, rounded
+           to 0.16 to account for the larger size of lumbar vertebrae).
+        5. Walk that arc distance from shoulder_proj along the contour.
 
-    Algorithm
-    ---------
-    a) SVD direction fit on the last 1/L5_TAIL_FIT_RATIO points of the contour
-       to get a clean "lower-spine axis" direction, unaffected by buttock curvature.
-    b) Target y = mid_hip_y − L5_ABOVE_HIP_FRAC * torso_height
-       (L5 sits slightly above the hip centre).
-    c) Extrapolate along the spine axis from the contour tail to target_y.
+    Fallback (apex_L unavailable):
+        target_y = hip_y − L5_ABOVE_HIP_FRAC * torso_height
 
     Parameters
     ----------
-    back_contour : (N, 2) ndarray, ordered top → bottom (same as pipeline usage)
+    back_contour : (N, 2) ndarray, ordered top → bottom
     shoulder     : (x, y) pixel coords of the mid-shoulder landmark
     hip          : (x, y) pixel coords of the mid-hip landmark
+    apex_L       : (2,) ndarray pixel coords of the lumbar apex (L3/L4), or None
+    idx_apex_L   : contour index of apex_L (-1 = unknown → triggers fallback)
 
     Returns
     -------
-    (2,) float32 ndarray — estimated L5 pixel position
+    (l5_point, shoulder_proj, hip_proj)
+        l5_point      : (2,) float32 — estimated L5 position on the contour
+        shoulder_proj : (2,) float32 — contour projection of shoulder landmark
+        hip_proj      : (2,) float32 — contour projection of hip landmark
+        (projections are None when the fallback path is used)
     """
-    n = len(back_contour)
+    if apex_L is not None and idx_apex_L >= 0:
+        # ── Primary: arc-length method ─────────────────────────────────────
+        ys = back_contour[:, 1].astype(np.float64)
 
-    # ── a. SVD fit on the tail segment ───────────────────────────────────
-    tail_len = max(4, n // config.L5_TAIL_FIT_RATIO)
-    tail = back_contour[-tail_len:].astype(np.float64)
-    centroid = tail.mean(axis=0)
-    _, _, Vt = np.linalg.svd(tail - centroid)
-    # First right-singular vector = principal direction of the tail segment.
-    # Ensure it points downward (positive y) so extrapolation goes toward L5.
-    axis = Vt[0]
-    if axis[1] < 0:
-        axis = -axis
+        # 1. Project shoulder and hip onto contour by nearest y
+        shoulder_idx = int(np.argmin(np.abs(ys - float(shoulder[1]))))
+        hip_idx      = int(np.argmin(np.abs(ys - float(hip[1]))))
 
-    # ── b. Target y coordinate ────────────────────────────────────────────
-    torso_h = float(hip[1] - shoulder[1])
+        # Ensure shoulder_idx < apex_idx < hip_idx (contour is top→bottom)
+        shoulder_idx = min(shoulder_idx, idx_apex_L)
+        hip_idx      = max(hip_idx, idx_apex_L)
+
+        shoulder_proj = back_contour[shoulder_idx].astype(np.float32)
+        hip_proj      = back_contour[hip_idx].astype(np.float32)
+
+        # 2–3. Arc lengths from shoulder_proj
+        spine_arc = _calc_arc_length(back_contour, shoulder_idx, hip_idx)
+        apex_arc  = _calc_arc_length(back_contour, shoulder_idx, idx_apex_L)
+
+        # 4–5. Walk 16% of spine_arc past the apex
+        l5_arc = apex_arc + config.L5_SPINE_ARC_FRAC * spine_arc
+        l5_pt  = _contour_point_at_arc(back_contour, shoulder_idx, l5_arc)
+
+        return l5_pt, shoulder_proj, hip_proj
+
+    # ── Fallback: torso-height fraction ────────────────────────────────────
+    torso_h  = float(hip[1] - shoulder[1])
     target_y = float(hip[1]) - config.L5_ABOVE_HIP_FRAC * torso_h
-
-    # ── c. Extrapolate along spine axis to target_y ───────────────────────
-    # Starting from the tail centroid, walk along `axis` until y = target_y.
-    # axis[1] is the y-component; guard against near-horizontal axes.
-    if abs(axis[1]) < 1e-6:
-        # Degenerate: axis is nearly horizontal; fall back to last contour point
-        raw_pt = back_contour[-1].astype(np.float64)
-        raw_pt[1] = target_y
-    else:
-        t = (target_y - centroid[1]) / axis[1]
-        raw_pt = centroid + t * axis
-
-    # No ventral offset: the extrapolated point stays on the dorsal surface
-    # (same side as the back contour).  Shifting it toward the body interior
-    # would pull it rightward past the contour's x-range and corrupt the
-    # quadratic tangent fit in compute_angles.  The tangent direction is what
-    # matters for the angle computation; vertebral-body offset is not needed.
-    return raw_pt.astype(np.float32)
+    diffs    = np.abs(back_contour[:, 1].astype(np.float64) - target_y)
+    raw_pt   = back_contour[int(np.argmin(diffs))].astype(np.float32)
+    return raw_pt, None, None
