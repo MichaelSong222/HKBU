@@ -412,4 +412,278 @@ def draw_overlay(
                         cv2.FONT_HERSHEY_SIMPLEX, 0.48,
                         config.COLOR_WARNING_TEXT, 1, cv2.LINE_AA)
 
+    # ── 7. Forward Head Position overlay ─────────────────────────────────
+    _draw_fhp_overlay(img, r)
+
     return img
+
+
+def draw_fhp_on_image(
+    image_bgr: np.ndarray,
+    lms,
+    facing_direction: str,
+    forward_head_angle_deg: float,
+    fhd_result: dict | None = None,
+) -> np.ndarray:
+    """
+    Draw FHP (CV angle) and optionally FHD construction on *image_bgr*.
+    Called when the FHP photo is separate from the contour photo.
+    Returns the annotated copy.
+    """
+    img = image_bgr.copy()
+    _draw_fhp_overlay_raw(img, lms, facing_direction, forward_head_angle_deg,
+                          image_bgr.shape[1], image_bgr.shape[0])
+    if fhd_result is not None:
+        _draw_fhd_overlay(img, fhd_result, facing_direction)
+    return img
+
+
+def _draw_fhp_overlay(img: np.ndarray, r) -> None:
+    """Thin wrapper that pulls fields from an AnalysisResult and delegates."""
+    if getattr(r, "forward_head_angle_deg", None) is None:
+        return
+    if r._raw_landmarks is None:
+        return
+    _draw_fhp_overlay_raw(
+        img,
+        r._raw_landmarks,
+        getattr(r, "facing_direction", "right"),
+        r.forward_head_angle_deg,
+        img.shape[1],
+        img.shape[0],
+    )
+
+
+def _draw_fhp_overlay_raw(
+    img: np.ndarray,
+    lms,
+    facing_direction: str,
+    cv_angle_deg: float,
+    img_w: int,
+    img_h: int,
+) -> None:
+    """
+    Draw Forward Head Position construction lines directly onto *img*.
+
+    Geometry:
+      - ear_px     = landmark pixel coords of the visible ear
+      - shoulder_px = landmark pixel coords of the visible shoulder
+      - vert_pt    = (ear_px[0], shoulder_px[1])   ← directly below ear, at shoulder height
+      - CV angle   = angle at vertex=shoulder between ray→ear and ray→vert_pt
+        (matches calculate_forward_head_position in side_metrics.py)
+
+    Drawn elements:
+      • Solid cyan line   : ear_px → shoulder_px
+      • Dashed white line : ear_px → vert_pt  (vertical reference)
+      • Filled arc at shoulder_px marking the CV angle
+      • Dot at ear_px and shoulder_px
+      • Label "FHP: N.N°" near the shoulder
+    """
+    # ── Landmark selection ────────────────────────────────────────────────
+    _LEFT_EAR       = 7
+    _RIGHT_EAR      = 8
+    _LEFT_SHOULDER  = 11
+    _RIGHT_SHOULDER = 12
+
+    if facing_direction == "left":
+        ear_lm = lms[_RIGHT_EAR]
+    else:
+        ear_lm = lms[_LEFT_EAR]
+
+    # ── Pixel coordinates ────────────────────────────────────────────────
+    # Ear: visible-side ear landmark
+    # C7 proxy: midpoint of BOTH shoulders — this is the correct anatomical
+    #           reference for C7 and matches calculate_fhd() in side_metrics.py.
+    #           Using a single-side shoulder produces a laterally-offset endpoint.
+    ear_px  = np.array([ear_lm.x * img_w,  ear_lm.y * img_h], dtype=float)
+
+    l_sh_lm = lms[_LEFT_SHOULDER]
+    r_sh_lm = lms[_RIGHT_SHOULDER]
+    sh_px   = np.array([
+        (l_sh_lm.x + r_sh_lm.x) / 2 * img_w,
+        (l_sh_lm.y + r_sh_lm.y) / 2 * img_h,
+    ], dtype=float)
+
+    vert_pt = np.array([ear_px[0], sh_px[1]], dtype=float)
+
+    COLOR_FHP  = (230, 160, 0)    # blue-ish (BGR)
+    COLOR_VERT = (200, 200, 200)  # light grey
+
+    # ── Lines ──────────────────────────────────────────────────────────────
+    # Solid: ear → shoulder
+    cv2.line(img, _to_int(ear_px), _to_int(sh_px), COLOR_FHP, 2, cv2.LINE_AA)
+
+    # Dashed vertical reference: ear → vert_pt
+    _draw_dashed_line(img, _to_int(ear_px), _to_int(vert_pt),
+                      COLOR_VERT, thickness=1, dash=8, gap=5)
+
+    # ── Dots ───────────────────────────────────────────────────────────────
+    for pt in (ear_px, sh_px):
+        cv2.circle(img, _to_int(pt), 6, (20, 20, 20), -1, cv2.LINE_AA)
+        cv2.circle(img, _to_int(pt), 5, COLOR_FHP,    -1, cv2.LINE_AA)
+
+    # ── Arc at shoulder vertex ─────────────────────────────────────────────
+    # Vectors FROM shoulder TOWARD ear and toward vert_pt
+    try:
+        v_ear  = _unit(ear_px  - sh_px)
+        v_vert = _unit(vert_pt - sh_px)
+        _draw_angle_arc(img, sh_px, v_ear, v_vert,
+                        cv_angle_deg, "cv", COLOR_FHP, arc_r=30)
+    except Exception:
+        pass
+
+    # ── Label ──────────────────────────────────────────────────────────────
+    label = f"FHP: {cv_angle_deg:.1f}"
+    lx = int(sh_px[0]) + (10 if facing_direction == "left" else -130)
+    ly = int(sh_px[1]) - 12
+    cv2.putText(img, label, (lx + 1, ly + 1),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 2, cv2.LINE_AA)
+    cv2.putText(img, label, (lx, ly),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_FHP, 1, cv2.LINE_AA)
+
+
+# ─── FHD overlay ─────────────────────────────────────────────────────────────
+
+# Severity → BGR colour
+_FHD_COLORS = {
+    "Normal":   (60,  200,  60),    # green
+    "Mild":     (0,   210, 255),    # yellow
+    "Moderate": (0,   140, 255),    # orange
+    "Severe":   (40,   40, 220),    # red
+}
+
+
+def draw_fhd_on_image(
+    image_bgr: np.ndarray,
+    fhd_result: dict,
+    facing_direction: str = "right",
+) -> np.ndarray:
+    """
+    Draw Forward Head Distance construction on a copy of *image_bgr*.
+    Reads pre-computed values from the dict returned by calculate_fhd().
+    Returns the annotated image (does not modify the original).
+    """
+    img = image_bgr.copy()
+    _draw_fhd_overlay(img, fhd_result, facing_direction)
+    return img
+
+
+def _draw_fhd_overlay_from_result(img: np.ndarray, r) -> None:
+    """
+    Thin wrapper: pull FHD fields from an AnalysisResult and delegate.
+    Called at the end of draw_overlay() when FHD data is present.
+    """
+    if getattr(r, "fhd_inches", None) is None:
+        return
+    if r.fhd_ear_point is None or r.fhd_c7_point is None:
+        return
+    fhd_dict = {
+        "fhd_pixels":     r.fhd_pixels,
+        "fhd_cm":         r.fhd_cm,
+        "fhd_inches":     r.fhd_inches,
+        "spine_load_lbs": r.spine_load_lbs,
+        "ear_point":      r.fhd_ear_point,
+        "c7_point":       r.fhd_c7_point,
+        "severity":       r.fhd_severity,
+    }
+    _draw_fhd_overlay(img, fhd_dict, getattr(r, "facing_direction", "right"))
+
+
+def _draw_fhd_overlay(
+    img: np.ndarray,
+    fhd: dict,
+    facing_direction: str,
+) -> None:
+    """
+    Draw FHD construction lines onto *img* (in-place).
+
+    Visual elements
+    ---------------
+    1. Vertical reference line  — dashed white, from C7-proxy straight down
+       to the height of the ear (or to a fixed length), showing the "plumb line"
+    2. Horizontal distance arrow — solid coloured line from C7-proxy x to ear x,
+       at ear height, with arrow tips at both ends
+    3. C7 dot — white filled circle at the shoulder midpoint
+    4. Ear dot — coloured filled circle at the ear landmark
+    5. Label box — "FHD: N.N in  |  Mild  |  XX lbs" near the ear,
+       background-filled for readability
+    """
+    if fhd.get("fhd_inches") is None:
+        return
+
+    ear_pt  = fhd["ear_point"]    # (x, y) int
+    c7_pt   = fhd["c7_point"]     # (x, y) int
+    severity = fhd.get("severity", "Normal")
+    color   = _FHD_COLORS.get(severity, _FHD_COLORS["Normal"])
+
+    ear_x, ear_y = ear_pt
+    c7_x,  c7_y  = c7_pt
+
+    # ── 1. Vertical plumb line from C7 down to ear height ─────────────────
+    plumb_top = (c7_x, min(c7_y, ear_y))
+    plumb_bot = (c7_x, max(c7_y, ear_y))
+    _draw_dashed_line(img, plumb_top, plumb_bot,
+                      (220, 220, 220), thickness=1, dash=8, gap=5)
+
+    # ── 2. Horizontal distance indicator at ear height ─────────────────────
+    h_left  = (min(c7_x, ear_x), ear_y)
+    h_right = (max(c7_x, ear_x), ear_y)
+
+    if abs(ear_x - c7_x) > 6:
+        cv2.line(img, h_left, h_right, color, 2, cv2.LINE_AA)
+        # Arrow tips (short diagonal ticks)
+        tip_len = 7
+        for px, direction in [(h_left[0], +1), (h_right[0], -1)]:
+            cv2.line(img, (px, ear_y),
+                     (px + direction * tip_len, ear_y - tip_len),
+                     color, 2, cv2.LINE_AA)
+            cv2.line(img, (px, ear_y),
+                     (px + direction * tip_len, ear_y + tip_len),
+                     color, 2, cv2.LINE_AA)
+
+    # ── 3. C7 dot ──────────────────────────────────────────────────────────
+    cv2.circle(img, c7_pt,  7, (20, 20, 20), -1, cv2.LINE_AA)
+    cv2.circle(img, c7_pt,  5, (220, 220, 220), -1, cv2.LINE_AA)
+    cv2.putText(img, "C7", (c7_x + 6, c7_y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
+
+    # ── 4. Ear dot ─────────────────────────────────────────────────────────
+    cv2.circle(img, ear_pt, 7, (20, 20, 20), -1, cv2.LINE_AA)
+    cv2.circle(img, ear_pt, 5, color,        -1, cv2.LINE_AA)
+
+    # ── 5. Label ───────────────────────────────────────────────────────────
+    fhd_in  = fhd["fhd_inches"]
+    sp_load = fhd["spine_load_lbs"]
+    line1   = f"FHD: {fhd_in:.1f} in  ({fhd['fhd_cm']:.1f} cm)"
+    line2   = f"{severity}  |  Spine load: {sp_load:.0f} lbs"
+
+    # Place label to the left or right depending on facing direction
+    font       = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.48
+    thickness  = 1
+    (w1, h1), _ = cv2.getTextSize(line1, font, font_scale, thickness)
+    (w2, _),  _ = cv2.getTextSize(line2, font, font_scale, thickness)
+    box_w = max(w1, w2) + 10
+    box_h = h1 * 2 + 16
+
+    if facing_direction == "left":
+        bx = ear_x + 12
+    else:
+        bx = ear_x - box_w - 12
+    by = ear_y - box_h // 2
+
+    # Dark background for legibility
+    overlay = img.copy()
+    cv2.rectangle(overlay, (bx - 4, by - 4),
+                  (bx + box_w, by + box_h), (15, 15, 15), -1)
+    cv2.addWeighted(overlay, 0.70, img, 0.30, 0, img)
+
+    # Text lines
+    cv2.putText(img, line1, (bx, by + h1 + 2),
+                font, font_scale, color, thickness + 1, cv2.LINE_AA)
+    cv2.putText(img, line1, (bx, by + h1 + 2),
+                font, font_scale, (240, 240, 240), thickness, cv2.LINE_AA)
+    cv2.putText(img, line2, (bx, by + h1 * 2 + 10),
+                font, font_scale, color, thickness + 1, cv2.LINE_AA)
+    cv2.putText(img, line2, (bx, by + h1 * 2 + 10),
+                font, font_scale, color, thickness, cv2.LINE_AA)

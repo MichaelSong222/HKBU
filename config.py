@@ -28,6 +28,31 @@ LUMBAR_LABELS = {
     "hyperlordosis": "Lumbar Hyperlordosis",
 }
 
+# ─── View classification ──────────────────────────────────────────────────────
+# Two signals are combined to classify side vs front view:
+#
+# Signal 1 — shoulder Z-depth difference (primary)
+#   MediaPipe z is depth relative to hip midpoint, normalised by torso length.
+#   Side view  : one shoulder much closer to camera → |z_L - z_R| ≥ 0.30
+#   Front view : both shoulders equidistant          → |z_L - z_R| ≈ 0.01
+#   Robust to portrait / landscape orientation.
+#
+# Signal 2 — shoulder-span / hip-span ratio (guard)
+#   A tilted-front photo can still produce high z_diff, but on a true front
+#   view the person's hips are also wide → sh_span ≈ hip_span → ratio ~1–2.
+#   A tilted-front (large sh_span, near-zero hip_span) gives ratio >> 5,
+#   which overrides the z_diff and marks it as NOT a side view.
+#
+# Rule: is_side_view = (z_diff >= Z_MIN) AND (sh_span/hip_span < RATIO_MAX)
+# Fallback when z is ambiguous (0.10–0.30): use shoulder-line angle.
+#
+# Validated on 6 real images (portrait + landscape), 0 errors:
+#   Side  view : z=0.46–0.73  sh/hip=0.81–3.80
+#   Front view : z=0.01–0.60  sh/hip=1.72–8.58
+SIDE_VIEW_Z_DIFF_MIN       = 0.30
+SIDE_VIEW_SH_HIP_RATIO_MAX = 5.0
+SIDE_VIEW_SHOULDER_ANGLE_MIN_DEG = 20.0   # fallback for ambiguous z zone
+
 # ─── Posture validity ─────────────────────────────────────────────────────────
 # Maximum allowed deviation (degrees) of Shoulder→Hip line from true vertical
 # before the result is flagged LOW CONFIDENCE.

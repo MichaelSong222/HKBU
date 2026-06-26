@@ -1,15 +1,15 @@
 """
 pose_detector.py — MediaPipe Pose: shoulder/hip detection + verticality check.
 
-Landmark choice: Person faces RIGHT (back on LEFT). We use the LEFT landmarks
-(MediaPipe IDs 11/23) which correspond to the FAR side from camera, typically
-more occulded, but for a true sagittal view both sides should be similar.
-In practice we average left & right landmarks when both are detected with
-reasonable visibility, giving a midline estimate that is robust to slight
-camera offset. Visibility threshold is 0.5.
+Uses mp.solutions.pose (model_complexity=2), identical to the Spine/ reference.
+
+Added vs reference:
+  - detect_pose() returns "facing_direction" ("right" or "left") determined by
+    comparing left_shoulder.x vs right_shoulder.x.
 """
 
 import math
+import cv2
 import numpy as np
 import mediapipe as mp
 
@@ -42,11 +42,13 @@ def _avg_visible(lm_a, lm_b, w: int, h: int, threshold: float = 0.5):
 def detect_pose(image_bgr: np.ndarray) -> dict:
     """
     Run MediaPipe Pose on *image_bgr* and return a dict with:
-        shoulder   : (x, y) pixel coords
-        hip        : (x, y) pixel coords
-        vertical_deviation_deg : angle of Shoulder→Hip from true vertical
-        is_vertical : bool — True if deviation <= VERTICAL_DEVIATION_THRESHOLD_DEG
-        raw_landmarks : the full MediaPipe landmark list (for debugging)
+        shoulder             : (x, y) pixel coords
+        hip                  : (x, y) pixel coords
+        vertical_deviation_deg
+        is_vertical          : bool
+        raw_landmarks        : the full MediaPipe landmark list
+        facing_direction     : "right" if person faces right (back on left edge),
+                               "left"  if person faces left  (back on right edge)
 
     Raises PoseDetectionError if landmarks cannot be found.
     """
@@ -58,7 +60,6 @@ def detect_pose(image_bgr: np.ndarray) -> dict:
         enable_segmentation=False,
         min_detection_confidence=0.5,
     ) as pose:
-        import cv2
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         results = pose.process(rgb)
 
@@ -89,10 +90,53 @@ def detect_pose(image_bgr: np.ndarray) -> dict:
 
     is_vertical = vertical_deviation <= config.VERTICAL_DEVIATION_THRESHOLD_DEG
 
+    # ── View classification ───────────────────────────────────────────────
+    # See config.py for full rationale.  Two signals combined:
+    #   1. Shoulder Z-depth difference (primary, orientation-independent)
+    #   2. Shoulder-span / hip-span ratio (guard against tilted front views)
+    l_sh_lm  = lms[mp_pose.PoseLandmark.LEFT_SHOULDER]
+    r_sh_lm  = lms[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+    l_hip_lm = lms[mp_pose.PoseLandmark.LEFT_HIP]
+    r_hip_lm = lms[mp_pose.PoseLandmark.RIGHT_HIP]
+
+    sh_z_diff     = abs(l_sh_lm.z - r_sh_lm.z)
+    sh_span_norm  = abs(l_sh_lm.x - r_sh_lm.x)
+    hip_span_norm = abs(l_hip_lm.x - r_hip_lm.x)
+    sh_hip_ratio  = sh_span_norm / (hip_span_norm + 0.001)
+
+    # Shoulder-line angle (normalised coords) — fallback for ambiguous z zone
+    sh_dx_n = r_sh_lm.x - l_sh_lm.x
+    sh_dy_n = r_sh_lm.y - l_sh_lm.y
+    shoulder_line_angle_deg = abs(math.degrees(math.atan2(sh_dy_n, sh_dx_n)))
+    if shoulder_line_angle_deg > 90:
+        shoulder_line_angle_deg = 180 - shoulder_line_angle_deg
+
+    if sh_z_diff >= config.SIDE_VIEW_Z_DIFF_MIN:
+        # High z_diff likely = side view, unless sh/hip ratio is very large
+        # (which signals a tilted-front pose where hips are nearly hidden)
+        is_side_view = sh_hip_ratio < config.SIDE_VIEW_SH_HIP_RATIO_MAX
+    elif sh_z_diff < 0.10:
+        is_side_view = False
+    else:
+        # Ambiguous z zone: fall back to shoulder-line angle
+        is_side_view = shoulder_line_angle_deg >= config.SIDE_VIEW_SHOULDER_ANGLE_MIN_DEG
+
+    # Facing direction: compare nose x with shoulder midpoint x.
+    # In a side-view image:
+    #   nose to the RIGHT of shoulder midpoint → person faces right (back on left)
+    #   nose to the LEFT  of shoulder midpoint → person faces left  (back on right)
+    nose       = lms[mp_pose.PoseLandmark.NOSE]
+    sh_mid_x   = (lms[mp_pose.PoseLandmark.LEFT_SHOULDER].x +
+                  lms[mp_pose.PoseLandmark.RIGHT_SHOULDER].x) / 2
+    facing_direction = "right" if nose.x > sh_mid_x else "left"
+
     return {
-        "shoulder": shoulder,
-        "hip": hip,
-        "vertical_deviation_deg": vertical_deviation,
-        "is_vertical": is_vertical,
-        "raw_landmarks": lms,
+        "shoulder":                 shoulder,
+        "hip":                      hip,
+        "vertical_deviation_deg":   vertical_deviation,
+        "is_vertical":              is_vertical,
+        "raw_landmarks":            lms,
+        "facing_direction":         facing_direction,
+        "is_side_view":             is_side_view,
+        "shoulder_line_angle_deg":  shoulder_line_angle_deg,
     }

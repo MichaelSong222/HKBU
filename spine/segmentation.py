@@ -1,15 +1,12 @@
 """
-segmentation.py — Silhouette extraction and back-contour (left edge) detection.
+segmentation.py — Silhouette extraction and back-contour edge detection.
 
-Library choice: MediaPipe Selfie Segmentation.
-  - Bundled with mediapipe, zero extra install.
-  - Produces a clean binary mask at full resolution.
-  - rembg (U2Net) would give sharper edges but requires a ~170 MB model download
-    and onnxruntime; chosen against to keep setup simple.
+Uses MediaPipe Selfie Segmentation (model 1), identical to the Spine/ reference.
 
-Person faces RIGHT → back is on the LEFT side of the silhouette.
-We extract the LEFT boundary of the torso mask as an ordered list of (x, y)
-pixel positions from top to bottom.  This is the "back contour" A→B.
+Added vs reference:
+  - extract_back_contour() accepts facing_direction="right"|"left"
+    - "right": back is on LEFT edge  → take xs[0]  (original logic)
+    - "left":  back is on RIGHT edge → take xs[-1]
 """
 
 import cv2
@@ -54,16 +51,17 @@ def extract_back_contour(
     mask: np.ndarray,
     shoulder_y: float,
     hip_y: float,
+    facing_direction: str = "right",
 ) -> np.ndarray:
     """
-    Extract the LEFT boundary of the torso silhouette between shoulder_y and
+    Extract the back boundary of the torso silhouette between shoulder_y and
     hip_y as an (N, 2) float32 array of (x, y) points ordered top→bottom.
 
-    'Left boundary' = smallest x-coordinate among mask pixels on each row.
-    This corresponds to the back of a right-facing person.
+    facing_direction="right": back is on LEFT edge  → xs[0]  (leftmost pixel per row)
+    facing_direction="left":  back is on RIGHT edge → xs[-1] (rightmost pixel per row)
 
-    If a row has multiple disjoint mask segments (rare with clean segmentation),
-    we take the leftmost segment's left edge.
+    If a row has multiple disjoint mask segments, xs[0]/xs[-1] picks the
+    outermost pixel of the outermost segment — i.e. the true back edge.
 
     Returns shape (N, 2) with N == number of valid rows.
     Raises SegmentationError if fewer than 10 rows are valid.
@@ -77,9 +75,11 @@ def extract_back_contour(
         xs = np.where(row > 0)[0]
         if xs.size == 0:
             continue
-        # Left edge of the leftmost foreground run
-        left_x = int(xs[0])
-        points.append((float(left_x), float(y)))
+        if facing_direction == "left":
+            back_x = int(xs[-1])   # rightmost pixel = back edge when facing left
+        else:
+            back_x = int(xs[0])    # leftmost pixel  = back edge when facing right
+        points.append((float(back_x), float(y)))
 
     if len(points) < 10:
         raise SegmentationError(

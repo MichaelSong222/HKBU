@@ -181,6 +181,7 @@ def find_anatomical_markers(
     contour: np.ndarray,
     idx_A: int,
     idx_B: int,
+    facing_direction: str = "right",
 ) -> dict:
     """
     Locate apex_K, inflect, and apex_L on the A→B sub-contour.
@@ -211,13 +212,19 @@ def find_anatomical_markers(
 
     w = config.APEX_SEARCH_WINDOW_FRAC / 2   # half-window
 
-    # ── apex_K: leftmost x in upper third ─────────────────────────────────
+    # ── apex_K: most-outward x in upper third ─────────────────────────────
+    # facing_direction="right" → back is on left → outward = min(x)
+    # facing_direction="left"  → back is on right → outward = max(x)
     upper_mask = fracs <= (0.33 + w)
     if upper_mask.sum() < 3:
         upper_mask = np.ones(n, bool)
     local_x = sub[:, 0].copy()
-    local_x[~upper_mask] = np.inf
-    idx_apex_K_local = int(np.argmin(local_x))
+    if facing_direction == "left":
+        local_x[~upper_mask] = -np.inf
+        idx_apex_K_local = int(np.argmax(local_x))
+    else:
+        local_x[~upper_mask] = np.inf
+        idx_apex_K_local = int(np.argmin(local_x))
 
     # ── inflect: curvature sign change near the 50% arc split ─────────────
     kappa = compute_curvature(sub)
@@ -248,13 +255,19 @@ def find_anatomical_markers(
         mid_kappa[~mid_mask] = np.inf
         inflect_idx_local = int(np.argmin(mid_kappa))
 
-    # ── apex_L: rightmost x in lower region ───────────────────────────────
+    # ── apex_L: most-inward x in lower region ─────────────────────────────
+    # facing_direction="right" → inward = max(x)
+    # facing_direction="left"  → inward = min(x)
     lower_mask = fracs >= (0.66 - w)
     if lower_mask.sum() < 3:
         lower_mask = np.ones(n, bool)
     local_x2 = sub[:, 0].copy()
-    local_x2[~lower_mask] = -np.inf
-    idx_apex_L_local = int(np.argmax(local_x2))
+    if facing_direction == "left":
+        local_x2[~lower_mask] = np.inf
+        idx_apex_L_local = int(np.argmin(local_x2))
+    else:
+        local_x2[~lower_mask] = -np.inf
+        idx_apex_L_local = int(np.argmax(local_x2))
 
     # Map local indices back to full contour indices
     offset = idx_A
@@ -275,22 +288,19 @@ def find_reliable_lumbar_end(
     idx_inflect: int,
     idx_B: int,
     image_height: int,
+    facing_direction: str = "right",
 ) -> tuple[int, bool, np.ndarray | None]:
     """
     Scan upward from B to find the last reliable lumbar point before the
-    buttock protrusion causes the contour to swing outward (rightward).
+    buttock protrusion causes the contour to swing outward.
 
-    Heuristic:
-      - Compute dx/dy (horizontal change per vertical pixel) along the
-        lower portion of the lumbar sub-contour (inflect→B).
-      - Scan from B upward; the first point where dx/dy exceeds
-        BUTTOCK_SLOPE_CHANGE_THRESHOLD (contour rapidly going left→right
-        = buttock bulge) marks the occlusion start.
-      - Everything BELOW (higher y) that point is discarded.
-      - The reliable end is the point just above that transition.
+    facing_direction="right": back on left edge → buttock swings contour
+        rightward (dxdy > +thresh).
+    facing_direction="left": back on right edge → buttock swings contour
+        leftward (dxdy < -thresh).
 
     Returns:
-      (idx_reliable_end,  is_extrapolated,  virtual_B_point_or_None)
+      (idx_reliable_end,  is_low_confidence,  virtual_B_point_or_None)
 
     If the extrapolation distance exceeds LUMBAR_EXTRAPOLATION_MAX_FRAC
     of image height, the second return value is True (low confidence).
@@ -317,10 +327,17 @@ def find_reliable_lumbar_end(
         dxdy_s = savgol_filter(dxdy, window_length=win, polyorder=1)
 
         # Scan from bottom (index n-1) upward; find the first point
-        # where dxdy_s exceeds the threshold (contour going rightward)
+        # where the contour swings outward due to buttock protrusion.
+        # facing="right": outward = rightward → dxdy > +thresh
+        # facing="left":  outward = leftward  → dxdy < -thresh
         thresh = config.BUTTOCK_SLOPE_CHANGE_THRESHOLD
         for i in range(n - 1, 0, -1):
-            if dxdy_s[i] > thresh:
+            triggered = (
+                dxdy_s[i] > thresh
+                if facing_direction != "left"
+                else dxdy_s[i] < -thresh
+            )
+            if triggered:
                 occlusion_found = True
                 reliable_end_local = i - 1
                 break

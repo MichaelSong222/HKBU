@@ -31,6 +31,7 @@ class _CameraThread(QThread):
         while self._running:
             ok, frame = cap.read()
             if ok:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 self.frame_ready.emit(frame)
             self.msleep(33)   # ~30 fps
         cap.release()

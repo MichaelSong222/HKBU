@@ -98,6 +98,23 @@ class AnalysisResult:
     lumbar_class_key:     Optional[str] = None
     lumbar_class_label:   Optional[str] = None
 
+    # ── Facing direction ──────────────────────────────────────────────────
+    facing_direction: str = "right"   # "right" or "left"
+
+    # ── Forward head position ─────────────────────────────────────────────
+    forward_head_angle_deg: Optional[float] = None   # craniovertebral angle
+    forward_displacement_px: Optional[float] = None  # horizontal ear→shoulder offset
+    neck_inclination_deg: Optional[float] = None
+
+    # ── Forward Head Distance (FHD / Kapandji model) ──────────────────────
+    fhd_pixels:     Optional[float] = None
+    fhd_cm:         Optional[float] = None
+    fhd_inches:     Optional[float] = None
+    spine_load_lbs: Optional[float] = None
+    fhd_severity:   Optional[str]   = None   # "Normal"/"Mild"/"Moderate"/"Severe"
+    fhd_ear_point:  Optional[tuple] = None   # (x, y) pixel
+    fhd_c7_point:   Optional[tuple] = None   # (x, y) pixel
+
     # ── Confidence flags & warnings ───────────────────────────────────────
     low_confidence: bool = False
     lumbar_low_confidence: bool = False
@@ -110,10 +127,20 @@ class AnalysisResult:
 
 # ─── Pipeline ─────────────────────────────────────────────────────────────────
 
-def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
+def run_analysis(
+    image_bgr: np.ndarray,
+    mode: str = "full",
+) -> AnalysisResult:
     """
-    Run the full spine analysis pipeline on *image_bgr* and return an
-    AnalysisResult.  Never raises — errors are captured in result.error.
+    Run the spine analysis pipeline on *image_bgr* and return an AnalysisResult.
+    Never raises — errors are captured in result.error.
+
+    mode="full"    : full pipeline (contour + angles + FHP)  [default]
+    mode="contour" : Steps 1-7 only — spine contour, Cobb angles, classification.
+                     FHP (Step 8) is skipped.  Use for the arms-forward photo.
+    mode="fhp"     : Steps 1 + 8 only — pose detection + FHP calculation.
+                     Contour segmentation and angle computation are skipped.
+                     Use for the natural-standing photo.
     """
     result = AnalysisResult(image_bgr=image_bgr)
 
@@ -134,6 +161,23 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
     result.vertical_deviation_deg = pose["vertical_deviation_deg"]
     result.is_vertical = pose["is_vertical"]
     result._raw_landmarks = pose["raw_landmarks"]
+    result.facing_direction = pose["facing_direction"]
+    facing_direction = pose["facing_direction"]
+
+    # ── Step 1b: View-type gate ────────────────────────────────────────────
+    # Spine pipeline expects a SIDE view.  If pose_detector classified the
+    # image as a front view, abort immediately with a clear message so the
+    # GUI can display a retake prompt rather than running bogus contour math.
+    is_side_view = pose.get("is_side_view", True)
+    angle_deg    = pose.get("shoulder_line_angle_deg", 90.0)
+    if not is_side_view:
+        result.success = False
+        result.error   = (
+            f"WRONG_VIEW:side:"
+            f"This looks like a FRONT-VIEW photo (shoulder line angle {angle_deg:.0f}°). "
+            "Please stand sideways (left or right side facing the camera) and retake."
+        )
+        return result
 
     if not result.is_vertical:
         result.low_confidence = True
@@ -142,6 +186,38 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             "Please stand straighter and retake."
         )
 
+    # ── mode="fhp": pose-only path — skip contour analysis ───────────────
+    if mode == "fhp":
+        try:
+            from posture.side_metrics import (
+                calculate_forward_head_position,
+                calculate_fhd,
+            )
+            img_w      = image_bgr.shape[1]
+            img_h_full = image_bgr.shape[0]
+
+            fhp = calculate_forward_head_position(
+                result._raw_landmarks, facing_direction, img_w, img_h_full
+            )
+            result.forward_head_angle_deg  = fhp["craniovertebral_angle_deg"]
+            result.forward_displacement_px = fhp["forward_displacement_px"]
+            result.neck_inclination_deg    = fhp["neck_inclination_deg"]
+
+            fhd = calculate_fhd(
+                result._raw_landmarks, img_w, img_h_full,
+                facing_direction=facing_direction,
+            )
+            result.fhd_pixels     = fhd["fhd_pixels"]
+            result.fhd_cm         = fhd["fhd_cm"]
+            result.fhd_inches     = fhd["fhd_inches"]
+            result.spine_load_lbs = fhd["spine_load_lbs"]
+            result.fhd_severity   = fhd["severity"]
+            result.fhd_ear_point  = fhd["ear_point"]
+            result.fhd_c7_point   = fhd["c7_point"]
+        except Exception as e:
+            result.warnings.append(f"FHP/FHD computation failed: {e}")
+        return result
+
     # ── Step 2: Segmentation & back contour ───────────────────────────────
     try:
         mask = get_segmentation_mask(image_bgr)
@@ -149,6 +225,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             mask,
             shoulder_y=result.shoulder[1],
             hip_y=result.hip[1],
+            facing_direction=facing_direction,
         )
         contour = smooth_contour(raw_contour, window=9)
         if config.CONTOUR_SMOOTH_FACTOR > 0:
@@ -181,7 +258,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
 
     # ── Step 4: Anatomical markers ─────────────────────────────────────────
     try:
-        markers = find_anatomical_markers(contour, idx_A, idx_B)
+        markers = find_anatomical_markers(contour, idx_A, idx_B, facing_direction=facing_direction)
     except Exception as e:
         result.success = False
         result.error = f"Marker detection failed: {e}"
@@ -202,6 +279,7 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
             idx_inflect=result.idx_inflect,
             idx_B=idx_B,
             image_height=img_h,
+            facing_direction=facing_direction,
         )
     except Exception as e:
         idx_rel_end   = idx_B
@@ -228,11 +306,12 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
     # angle computation below.  The original virtual_B path (slope-based) is
     # preserved byte-for-byte above and used as the fallback.
     if config.USE_ESTIMATED_L5 and result._raw_landmarks is not None:
-        import mediapipe as mp
-        _mp_pose = mp.solutions.pose
+        # Landmark index constants (MediaPipe 33-point schema)
+        _LEFT_HIP  = 23
+        _RIGHT_HIP = 24
         lms = result._raw_landmarks
-        lh = lms[_mp_pose.PoseLandmark.LEFT_HIP]
-        rh = lms[_mp_pose.PoseLandmark.RIGHT_HIP]
+        lh = lms[_LEFT_HIP]
+        rh = lms[_RIGHT_HIP]
         hips_visible = (
             lh.visibility >= config.L5_HIP_VISIBILITY_MIN
             or rh.visibility >= config.L5_HIP_VISIBILITY_MIN
@@ -299,5 +378,37 @@ def run_analysis(image_bgr: np.ndarray) -> AnalysisResult:
     result.thoracic_class_label = th_label
     result.lumbar_class_key     = lu_key
     result.lumbar_class_label   = lu_label
+
+    # ── Step 8: Forward head position + Forward Head Distance ────────────────
+    # Skipped when mode="contour" (arms-forward photo — ear is not at neutral pos)
+    if mode != "contour":
+        try:
+            from posture.side_metrics import (
+                calculate_forward_head_position,
+                calculate_fhd,
+            )
+            img_w      = image_bgr.shape[1]
+            img_h_full = image_bgr.shape[0]
+
+            fhp = calculate_forward_head_position(
+                result._raw_landmarks, facing_direction, img_w, img_h_full
+            )
+            result.forward_head_angle_deg  = fhp["craniovertebral_angle_deg"]
+            result.forward_displacement_px = fhp["forward_displacement_px"]
+            result.neck_inclination_deg    = fhp["neck_inclination_deg"]
+
+            fhd = calculate_fhd(
+                result._raw_landmarks, img_w, img_h_full,
+                facing_direction=facing_direction,
+            )
+            result.fhd_pixels     = fhd["fhd_pixels"]
+            result.fhd_cm         = fhd["fhd_cm"]
+            result.fhd_inches     = fhd["fhd_inches"]
+            result.spine_load_lbs = fhd["spine_load_lbs"]
+            result.fhd_severity   = fhd["severity"]
+            result.fhd_ear_point  = fhd["ear_point"]
+            result.fhd_c7_point   = fhd["c7_point"]
+        except Exception as e:
+            result.warnings.append(f"FHP/FHD computation failed: {e}")
 
     return result
