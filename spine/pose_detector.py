@@ -130,12 +130,16 @@ def detect_pose(image_bgr: np.ndarray) -> dict:
                   lms[mp_pose.PoseLandmark.RIGHT_SHOULDER].x) / 2
     facing_direction = "right" if nose.x > sh_mid_x else "left"
 
+    world_lms = (results.pose_world_landmarks.landmark
+                 if results.pose_world_landmarks is not None else None)
+
     return {
         "shoulder":                 shoulder,
         "hip":                      hip,
         "vertical_deviation_deg":   vertical_deviation,
         "is_vertical":              is_vertical,
         "raw_landmarks":            lms,
+        "world_landmarks":          world_lms,
         "facing_direction":         facing_direction,
         "is_side_view":             is_side_view,
         "shoulder_line_angle_deg":  shoulder_line_angle_deg,

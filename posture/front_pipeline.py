@@ -40,13 +40,13 @@ class FrontAnalysisResult:
     # (filled by pipeline so GUI can read them directly)
     head_tilt_deg:            Optional[float] = None
     head_tilt_direction:      str = "unknown"
-    shoulder_diff_px:         Optional[float] = None
+    shoulder_diff_cm:         Optional[float] = None
     shoulder_diff_normalized: Optional[float] = None
     shoulder_direction:       str = "unknown"
-    pelvic_diff_px:           Optional[float] = None
+    pelvic_diff_cm:           Optional[float] = None
     pelvic_diff_normalized:   Optional[float] = None
     pelvic_direction:         str = "unknown"
-    knee_diff_px:             Optional[float] = None
+    knee_diff_cm:             Optional[float] = None
     knee_diff_normalized:     Optional[float] = None
     knee_direction:           str = "unknown"
 
@@ -83,7 +83,8 @@ def analyze_front(image_bgr: np.ndarray) -> FrontAnalysisResult:
         result.error = f"Pose detection failed: {e}"
         return result
 
-    lms = pose["raw_landmarks"]
+    lms       = pose["raw_landmarks"]
+    world_lms = pose.get("world_landmarks")
     result._raw_landmarks = lms
     img_h, img_w = image_bgr.shape[:2]
 
@@ -111,27 +112,27 @@ def analyze_front(image_bgr: np.ndarray) -> FrontAnalysisResult:
         result.warnings.append(f"Head tilt failed: {e}")
 
     try:
-        sl = calculate_shoulder_level(lms, img_w, img_h)
+        sl = calculate_shoulder_level(lms, world_lms, img_w, img_h)
         result.shoulder_level            = sl
-        result.shoulder_diff_px          = sl.get("shoulder_diff_px")
+        result.shoulder_diff_cm          = sl.get("shoulder_diff_cm")
         result.shoulder_diff_normalized  = sl.get("shoulder_diff_normalized")
         result.shoulder_direction        = sl.get("direction", "unknown")
     except Exception as e:
         result.warnings.append(f"Shoulder level failed: {e}")
 
     try:
-        pl = calculate_pelvic_level(lms, img_w, img_h)
+        pl = calculate_pelvic_level(lms, world_lms, img_w, img_h)
         result.pelvic_level            = pl
-        result.pelvic_diff_px          = pl.get("pelvic_diff_px")
+        result.pelvic_diff_cm          = pl.get("pelvic_diff_cm")
         result.pelvic_diff_normalized  = pl.get("pelvic_diff_normalized")
         result.pelvic_direction        = pl.get("direction", "unknown")
     except Exception as e:
         result.warnings.append(f"Pelvic level failed: {e}")
 
     try:
-        kl = calculate_knee_level(lms, img_w, img_h)
+        kl = calculate_knee_level(lms, world_lms, img_w, img_h)
         result.knee_level            = kl
-        result.knee_diff_px          = kl.get("knee_diff_px")
+        result.knee_diff_cm          = kl.get("knee_diff_cm")
         result.knee_diff_normalized  = kl.get("knee_diff_normalized")
         result.knee_direction        = kl.get("direction", "unknown")
     except Exception as e:

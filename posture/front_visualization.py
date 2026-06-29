@@ -104,8 +104,8 @@ def draw_front_overlay(image_bgr: np.ndarray, front_result) -> np.ndarray:
     if ls.visibility >= 0.4 and rs.visibility >= 0.4:
         sl = r.shoulder_level
         color = _line_color(sl.get("shoulder_diff_normalized") if sl else None)
-        label = (f"Sho: {sl['diff_abs_px']:.0f}px {sl['direction']}"
-                 if sl and sl.get("diff_abs_px") is not None else "Sho: N/A")
+        label = (f"Sho: {sl['diff_abs_cm']:.1f}cm {sl['direction']}"
+                 if sl and sl.get("diff_abs_cm") is not None else "Sho: N/A")
         _draw_level_line(img, _lm_px(ls, w, h), _lm_px(rs, w, h), color, label)
 
     # ── Pelvic level ──────────────────────────────────────────────────────
@@ -114,8 +114,8 @@ def draw_front_overlay(image_bgr: np.ndarray, front_result) -> np.ndarray:
     if lh.visibility >= 0.4 and rh.visibility >= 0.4:
         pl = r.pelvic_level
         color = _line_color(pl.get("pelvic_diff_normalized") if pl else None)
-        label = (f"Hip: {pl['diff_abs_px']:.0f}px {pl['direction']}"
-                 if pl and pl.get("diff_abs_px") is not None else "Hip: N/A")
+        label = (f"Hip: {pl['diff_abs_cm']:.1f}cm {pl['direction']}"
+                 if pl and pl.get("diff_abs_cm") is not None else "Hip: N/A")
         _draw_level_line(img, _lm_px(lh, w, h), _lm_px(rh, w, h), color, label)
 
     # ── Knee level ────────────────────────────────────────────────────────
@@ -124,8 +124,8 @@ def draw_front_overlay(image_bgr: np.ndarray, front_result) -> np.ndarray:
     if lk.visibility >= 0.4 and rk.visibility >= 0.4:
         kl = r.knee_level
         color = _line_color(kl.get("knee_diff_normalized") if kl else None)
-        label = (f"Knee: {kl['diff_abs_px']:.0f}px {kl['direction']}"
-                 if kl and kl.get("diff_abs_px") is not None else "Knee: N/A")
+        label = (f"Knee: {kl['diff_abs_cm']:.1f}cm {kl['direction']}"
+                 if kl and kl.get("diff_abs_cm") is not None else "Knee: N/A")
         _draw_level_line(img, _lm_px(lk, w, h), _lm_px(rk, w, h), color, label)
 
     # ── Legend ────────────────────────────────────────────────────────────

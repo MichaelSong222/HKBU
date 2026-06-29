@@ -472,13 +472,13 @@ class FrontStepPage(_StepPage):
             f"<p>Tilt: <b style='color:#9f9;'>{_val(r.head_tilt_deg)}</b>  {_dir(r.head_tilt_direction)}</p>",
             "<hr/>",
             "<h3 style='color:#fc9;'>Shoulder Level</h3>",
-            f"<p>Diff: <b style='color:#fc9;'>{_val(r.shoulder_diff_px, 'px')}</b>  {_dir(r.shoulder_direction)}</p>",
+            f"<p>Diff: <b style='color:#fc9;'>{_val(r.shoulder_diff_cm, 'cm')}</b>  {_dir(r.shoulder_direction)}</p>",
             "<hr/>",
             "<h3 style='color:#f9c;'>Pelvic Level</h3>",
-            f"<p>Diff: <b style='color:#f9c;'>{_val(r.pelvic_diff_px, 'px')}</b>  {_dir(r.pelvic_direction)}</p>",
+            f"<p>Diff: <b style='color:#f9c;'>{_val(r.pelvic_diff_cm, 'cm')}</b>  {_dir(r.pelvic_direction)}</p>",
             "<hr/>",
             "<h3 style='color:#cf9;'>Knee Level</h3>",
-            f"<p>Diff: <b style='color:#cf9;'>{_val(r.knee_diff_px, 'px')}</b>  {_dir(r.knee_direction)}</p>",
+            f"<p>Diff: <b style='color:#cf9;'>{_val(r.knee_diff_cm, 'cm')}</b>  {_dir(r.knee_direction)}</p>",
         ]
         if r.warnings:
             lines.append("<hr/><p style='color:#fa0;'><b>Warnings:</b></p>")
@@ -675,11 +675,11 @@ class SummaryPage(QWidget):
             f"Head Tilt\n"
             f"  Angle:  {_v(r.head_tilt_deg)}  ({_d(r.head_tilt_direction)})\n\n"
             f"Shoulder Level\n"
-            f"  Diff:   {_v(r.shoulder_diff_px, 'px')}  ({_d(r.shoulder_direction)})\n\n"
+            f"  Diff:   {_v(r.shoulder_diff_cm, 'cm')}  ({_d(r.shoulder_direction)})\n\n"
             f"Pelvic Level\n"
-            f"  Diff:   {_v(r.pelvic_diff_px, 'px')}  ({_d(r.pelvic_direction)})\n\n"
+            f"  Diff:   {_v(r.pelvic_diff_cm, 'cm')}  ({_d(r.pelvic_direction)})\n\n"
             f"Knee Level\n"
-            f"  Diff:   {_v(r.knee_diff_px, 'px')}  ({_d(r.knee_direction)})"
+            f"  Diff:   {_v(r.knee_diff_cm, 'cm')}  ({_d(r.knee_direction)})"
         )
         txt.setPlainText(body)
         vl.addWidget(txt)

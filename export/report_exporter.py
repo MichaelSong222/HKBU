@@ -33,13 +33,13 @@ def export_csv(spine_result, front_result, output_path: str) -> None:
         # ── Front-view ────────────────────────────────────────────────
         "head_tilt_deg":            getattr(front_result, "head_tilt_deg",            None),
         "head_tilt_direction":      getattr(front_result, "head_tilt_direction",      ""),
-        "shoulder_diff_px":         getattr(front_result, "shoulder_diff_px",         None),
+        "shoulder_diff_cm":         getattr(front_result, "shoulder_diff_cm",         None),
         "shoulder_diff_normalized": getattr(front_result, "shoulder_diff_normalized", None),
         "shoulder_direction":       getattr(front_result, "shoulder_direction",       ""),
-        "pelvic_diff_px":           getattr(front_result, "pelvic_diff_px",           None),
+        "pelvic_diff_cm":           getattr(front_result, "pelvic_diff_cm",           None),
         "pelvic_diff_normalized":   getattr(front_result, "pelvic_diff_normalized",   None),
         "pelvic_direction":         getattr(front_result, "pelvic_direction",         ""),
-        "knee_diff_px":             getattr(front_result, "knee_diff_px",             None),
+        "knee_diff_cm":             getattr(front_result, "knee_diff_cm",             None),
         "knee_diff_normalized":     getattr(front_result, "knee_diff_normalized",     None),
         "knee_direction":           getattr(front_result, "knee_direction",           ""),
     }
