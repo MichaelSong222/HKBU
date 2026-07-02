@@ -69,7 +69,6 @@ class _FhpWorker(QThread):
     def run(self):
         result = run_analysis(self._image, mode="fhp")
         if result.success and result.forward_head_angle_deg is not None:
-            # Build fhd_result dict from AnalysisResult fields
             fhd_result = None
             if result.fhd_inches is not None:
                 fhd_result = {
@@ -81,12 +80,20 @@ class _FhpWorker(QThread):
                     "c7_point":       result.fhd_c7_point,
                     "severity":       result.fhd_severity,
                 }
+            cervical_result = None
+            if result.cervical_flexion_deg is not None:
+                cervical_result = {
+                    "cervical_flexion_deg": result.cervical_flexion_deg,
+                    "c7_point":             result.c7_seg_point,
+                    "ear_point":            result.fhd_ear_point,
+                }
             annotated = draw_fhp_on_image(
                 self._image,
                 result._raw_landmarks,
                 result.facing_direction,
                 result.forward_head_angle_deg,
                 fhd_result=fhd_result,
+                cervical_result=cervical_result,
             )
         else:
             annotated = self._image.copy()
@@ -400,15 +407,24 @@ class SpineFhpPage(_StepPage):
 
     def _format_result(self, r: AnalysisResult) -> str:
         lines = []
-        if r.forward_head_angle_deg is not None:
+        # Cervical flexion angle (new primary metric)
+        cerv = getattr(r, "cervical_flexion_deg", None)
+        if cerv is not None:
+            lines += [
+                "<h3 style='color:#0be;'>Neck Posture — Cervical Lordosis</h3>",
+                f"<p>Cervical flexion angle: <b style='font-size:18px;color:#0be;'>"
+                f"{cerv:.1f}°</b></p>",
+                "<p style='color:#888;font-size:10px;'>Method: ear · C7(seg) · vertical top</p>",
+            ]
+        elif r.forward_head_angle_deg is not None:
             lines += [
                 "<h3 style='color:#0be;'>Forward Head Position (FHP)</h3>",
-                f"<p>Craniovertebral angle: <b style='font-size:18px;color:#0be;'>"
+                f"<p>CV angle: <b style='font-size:18px;color:#0be;'>"
                 f"{r.forward_head_angle_deg:.1f}°</b></p>",
                 f"<p>Neck inclination: {r.neck_inclination_deg:.1f}°</p>",
             ]
         else:
-            lines.append("<p style='color:#fa0;'>FHP not detected.</p>")
+            lines.append("<p style='color:#fa0;'>Cervical angle not detected.</p>")
 
         # ── FHD block ──────────────────────────────────────────────────────
         if r.fhd_inches is not None:
@@ -497,8 +513,10 @@ class SummaryPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._spine_result = None
+        self._fhp_result   = None
         self._front_result = None
         self._spine_annotated: np.ndarray | None = None
+        self._fhp_annotated:   np.ndarray | None = None
         self._front_annotated: np.ndarray | None = None
         self._build()
 
@@ -520,13 +538,21 @@ class SummaryPage(QWidget):
 
         btn_row = QHBoxLayout()
 
-        self.btn_export = QPushButton("Export (PNG + CSV)")
+        self.btn_export = QPushButton("Export PDF Report")
         self.btn_export.setFixedHeight(36)
         self.btn_export.setStyleSheet(
             "QPushButton{background:#2a8a3c; color:white; border-radius:5px; font-size:13px;}"
         )
         self.btn_export.clicked.connect(self._on_export)
         btn_row.addWidget(self.btn_export)
+
+        self.btn_export_csv = QPushButton("Export PNG + CSV")
+        self.btn_export_csv.setFixedHeight(36)
+        self.btn_export_csv.setStyleSheet(
+            "QPushButton{background:#1a6fbc; color:white; border-radius:5px; font-size:13px;}"
+        )
+        self.btn_export_csv.clicked.connect(self._on_export_csv)
+        btn_row.addWidget(self.btn_export_csv)
 
         self.btn_restart = QPushButton("New Analysis")
         self.btn_restart.setFixedHeight(36)
@@ -546,8 +572,10 @@ class SummaryPage(QWidget):
         front_result: FrontAnalysisResult,
         front_annotated: np.ndarray,
         fhp_annotated: np.ndarray | None = None,
+        fhp_result=None,
     ):
         self._spine_result    = spine_result
+        self._fhp_result      = fhp_result
         self._front_result    = front_result
         self._spine_annotated = spine_annotated
         self._front_annotated = front_annotated
@@ -613,7 +641,14 @@ class SummaryPage(QWidget):
         dir_icon = "← left" if r.facing_direction == "left" else "→ right"
 
         fhp_str = ""
-        if r.forward_head_angle_deg is not None:
+        cerv = getattr(r, "cervical_flexion_deg", None)
+        if cerv is not None:
+            fhp_str = (
+                f"\n\nNeck Posture — Cervical Lordosis\n"
+                f"  Flexion angle:  {cerv:.1f}°\n"
+                f"  (ear · C7 · vertical top)"
+            )
+        elif r.forward_head_angle_deg is not None:
             fhp_str = (
                 f"\n\nForward Head Position (FHP)\n"
                 f"  CV angle:     {r.forward_head_angle_deg:.1f}°\n"
@@ -693,6 +728,29 @@ class SummaryPage(QWidget):
         if not folder:
             return
         try:
+            from export.pdf_exporter import export_pdf
+            ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = str(Path(folder) / f"report_{ts}.pdf")
+            export_pdf(
+                spine_result=self._spine_result,
+                fhp_result=self._fhp_result,
+                front_result=self._front_result,
+                contour_annotated=self._spine_annotated,
+                fhp_annotated=self._fhp_annotated,
+                front_annotated=self._front_annotated,
+                output_path=path,
+            )
+            QMessageBox.information(self, "Export Complete",
+                                    f"PDF saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
+
+    def _on_export_csv(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder",
+                                                  str(_CAPTURE_DIR))
+        if not folder:
+            return
+        try:
             from export.report_exporter import export_csv, export_images
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             export_images(self._spine_annotated, self._front_annotated, folder)
@@ -757,6 +815,8 @@ class MainWindow(QMainWindow):
         merged.forward_head_angle_deg  = fhp_result.forward_head_angle_deg
         merged.forward_displacement_px = fhp_result.forward_displacement_px
         merged.neck_inclination_deg    = fhp_result.neck_inclination_deg
+        merged.cervical_flexion_deg    = getattr(fhp_result, "cervical_flexion_deg", None)
+        merged.c7_seg_point            = getattr(fhp_result, "c7_seg_point", None)
 
         # Use contour annotated image for spine; FHP annotated for head position
         spine_annotated = self._contour_page.get_annotated()
@@ -767,6 +827,7 @@ class MainWindow(QMainWindow):
             merged,       spine_annotated,
             front_result, front_annotated,
             fhp_annotated=fhp_annotated,
+            fhp_result=fhp_result,
         )
         self._pages.setCurrentIndex(3)
 

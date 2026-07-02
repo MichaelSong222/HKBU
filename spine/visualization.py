@@ -424,22 +424,105 @@ def draw_fhp_on_image(
     facing_direction: str,
     forward_head_angle_deg: float,
     fhd_result: dict | None = None,
+    cervical_result: dict | None = None,
 ) -> np.ndarray:
     """
-    Draw FHP (CV angle) and optionally FHD construction on *image_bgr*.
-    Called when the FHP photo is separate from the contour photo.
+    Draw cervical flexion angle (new method) and optionally FHD on *image_bgr*.
+    Falls back to legacy CV-angle overlay when cervical_result is None.
     Returns the annotated copy.
     """
     img = image_bgr.copy()
-    _draw_fhp_overlay_raw(img, lms, facing_direction, forward_head_angle_deg,
-                          image_bgr.shape[1], image_bgr.shape[0])
+    if cervical_result is not None and cervical_result.get("cervical_flexion_deg") is not None:
+        _draw_cervical_overlay(img, cervical_result, lms, facing_direction)
+    else:
+        _draw_fhp_overlay_raw(img, lms, facing_direction, forward_head_angle_deg,
+                              image_bgr.shape[1], image_bgr.shape[0])
     if fhd_result is not None:
         _draw_fhd_overlay(img, fhd_result, facing_direction)
     return img
 
 
+def _draw_cervical_overlay(
+    img: np.ndarray,
+    cerv: dict,
+    lms,
+    facing_direction: str,
+) -> None:
+    """
+    Draw cervical lordosis flexion angle construction onto *img*.
+
+    Geometry drawn:
+      1. Dot at ear
+      2. Line from ear → shoulder (reference line, dashed)
+      3. Dot at C7 (back-most segmentation point at midpoint Y)
+      4. Vertical reference line above C7 (dashed white)
+      5. Arc at C7 marking the flexion angle
+      6. Label "Cerv: N.N°" near C7
+    """
+    import numpy as _np
+
+    ear_pt = cerv.get("ear_point")
+    c7_pt  = cerv.get("c7_point")
+    angle  = cerv.get("cervical_flexion_deg")
+    if ear_pt is None or c7_pt is None or angle is None:
+        return
+
+    img_w, img_h = img.shape[1], img.shape[0]
+
+    # Shoulder pixel for the reference dashed line
+    _LEFT_EAR       = 7
+    _RIGHT_EAR      = 8
+    _LEFT_SHOULDER  = 11
+    _RIGHT_SHOULDER = 12
+    if lms is not None:
+        sh_lm = lms[_RIGHT_SHOULDER] if facing_direction == "left" else lms[_LEFT_SHOULDER]
+        sh_pt = (int(sh_lm.x * img_w), int(sh_lm.y * img_h))
+    else:
+        sh_pt = None
+
+    COLOR_CERV  = (0, 200, 255)   # yellow (BGR)
+    COLOR_VERT  = (200, 200, 200) # grey
+    COLOR_DOT_O = (20,  20,  20)  # dark outline
+
+    ear_np = _np.array(ear_pt, float)
+    c7_np  = _np.array(c7_pt,  float)
+    vert_top = _np.array([c7_pt[0], max(0, c7_pt[1] - 120)], float)
+
+    # 1. Dashed line ear → shoulder (reference)
+    if sh_pt is not None:
+        _draw_dashed_line(img, ear_pt, sh_pt, COLOR_CERV, thickness=1, dash=8, gap=5)
+
+    # 2. Solid line ear → C7
+    cv2.line(img, ear_pt, c7_pt, COLOR_CERV, 2, cv2.LINE_AA)
+
+    # 3. Dashed vertical above C7
+    _draw_dashed_line(img, c7_pt, _to_int(vert_top), COLOR_VERT, thickness=1, dash=8, gap=5)
+
+    # 4. Dots at ear and C7
+    for pt in (ear_np, c7_np):
+        cv2.circle(img, _to_int(pt), 6, COLOR_DOT_O, -1, cv2.LINE_AA)
+        cv2.circle(img, _to_int(pt), 5, COLOR_CERV,  -1, cv2.LINE_AA)
+
+    # 5. Arc at C7 vertex
+    try:
+        v_ear  = _unit(ear_np  - c7_np)
+        v_vert = _unit(vert_top - c7_np)
+        _draw_angle_arc(img, c7_np, v_ear, v_vert, angle, "°", COLOR_CERV, arc_r=30)
+    except Exception:
+        pass
+
+    # 6. Label
+    label = f"Cerv: {angle:.1f}"
+    lx = c7_pt[0] + (10 if facing_direction == "left" else -140)
+    ly = c7_pt[1] - 14
+    cv2.putText(img, label, (lx + 1, ly + 1),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_DOT_O, 2, cv2.LINE_AA)
+    cv2.putText(img, label, (lx, ly),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_CERV, 1, cv2.LINE_AA)
+
+
 def _draw_fhp_overlay(img: np.ndarray, r) -> None:
-    """Thin wrapper that pulls fields from an AnalysisResult and delegates."""
+    """Thin wrapper: draws legacy CV-angle overlay from an AnalysisResult."""
     if getattr(r, "forward_head_angle_deg", None) is None:
         return
     if r._raw_landmarks is None:

@@ -42,12 +42,15 @@ class FrontAnalysisResult:
     head_tilt_direction:      str = "unknown"
     shoulder_diff_cm:         Optional[float] = None
     shoulder_diff_normalized: Optional[float] = None
+    shoulder_diff_px:         Optional[float] = None
     shoulder_direction:       str = "unknown"
     pelvic_diff_cm:           Optional[float] = None
     pelvic_diff_normalized:   Optional[float] = None
+    pelvic_diff_px:           Optional[float] = None
     pelvic_direction:         str = "unknown"
     knee_diff_cm:             Optional[float] = None
     knee_diff_normalized:     Optional[float] = None
+    knee_diff_px:             Optional[float] = None
     knee_direction:           str = "unknown"
 
     # ── Annotated image ────────────────────────────────────────────────────
@@ -116,6 +119,7 @@ def analyze_front(image_bgr: np.ndarray) -> FrontAnalysisResult:
         result.shoulder_level            = sl
         result.shoulder_diff_cm          = sl.get("shoulder_diff_cm")
         result.shoulder_diff_normalized  = sl.get("shoulder_diff_normalized")
+        result.shoulder_diff_px          = round(abs((sl.get("shoulder_diff_normalized") or 0.0) * img_h), 1)
         result.shoulder_direction        = sl.get("direction", "unknown")
     except Exception as e:
         result.warnings.append(f"Shoulder level failed: {e}")
@@ -125,6 +129,7 @@ def analyze_front(image_bgr: np.ndarray) -> FrontAnalysisResult:
         result.pelvic_level            = pl
         result.pelvic_diff_cm          = pl.get("pelvic_diff_cm")
         result.pelvic_diff_normalized  = pl.get("pelvic_diff_normalized")
+        result.pelvic_diff_px          = round(abs((pl.get("pelvic_diff_normalized") or 0.0) * img_h), 1)
         result.pelvic_direction        = pl.get("direction", "unknown")
     except Exception as e:
         result.warnings.append(f"Pelvic level failed: {e}")
@@ -134,6 +139,7 @@ def analyze_front(image_bgr: np.ndarray) -> FrontAnalysisResult:
         result.knee_level            = kl
         result.knee_diff_cm          = kl.get("knee_diff_cm")
         result.knee_diff_normalized  = kl.get("knee_diff_normalized")
+        result.knee_diff_px          = round(abs((kl.get("knee_diff_normalized") or 0.0) * img_h), 1)
         result.knee_direction        = kl.get("direction", "unknown")
     except Exception as e:
         result.warnings.append(f"Knee level failed: {e}")

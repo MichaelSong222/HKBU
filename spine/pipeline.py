@@ -102,9 +102,12 @@ class AnalysisResult:
     facing_direction: str = "right"   # "right" or "left"
 
     # ── Forward head position ─────────────────────────────────────────────
-    forward_head_angle_deg: Optional[float] = None   # craniovertebral angle
+    forward_head_angle_deg: Optional[float] = None   # craniovertebral angle (legacy)
     forward_displacement_px: Optional[float] = None  # horizontal ear→shoulder offset
     neck_inclination_deg: Optional[float] = None
+    # Cervical lordosis flexion angle (ear · C7_seg · vertical_top)
+    cervical_flexion_deg:   Optional[float] = None
+    c7_seg_point:           Optional[tuple] = None   # (x, y) pixel — segmentation C7
 
     # ── Forward Head Distance (FHD / Kapandji model) ──────────────────────
     fhd_pixels:     Optional[float] = None
@@ -186,12 +189,13 @@ def run_analysis(
             "Please stand straighter and retake."
         )
 
-    # ── mode="fhp": pose-only path — skip contour analysis ───────────────
+    # ── mode="fhp": run segmentation + cervical flexion ──────────────────
     if mode == "fhp":
         try:
             from posture.side_metrics import (
                 calculate_forward_head_position,
                 calculate_fhd,
+                calculate_cervical_flexion,
             )
             img_w      = image_bgr.shape[1]
             img_h_full = image_bgr.shape[0]
@@ -202,6 +206,18 @@ def run_analysis(
             result.forward_head_angle_deg  = fhp["craniovertebral_angle_deg"]
             result.forward_displacement_px = fhp["forward_displacement_px"]
             result.neck_inclination_deg    = fhp["neck_inclination_deg"]
+
+            # Cervical flexion: needs segmentation mask to locate C7
+            try:
+                mask = get_segmentation_mask(image_bgr)
+                cerv = calculate_cervical_flexion(
+                    result._raw_landmarks, facing_direction,
+                    img_w, img_h_full, mask,
+                )
+                result.cervical_flexion_deg = cerv["cervical_flexion_deg"]
+                result.c7_seg_point         = cerv["c7_point"]
+            except Exception as e_cerv:
+                result.warnings.append(f"Cervical flexion failed: {e_cerv}")
 
             fhd = calculate_fhd(
                 result._raw_landmarks, img_w, img_h_full,

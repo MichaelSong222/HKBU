@@ -18,5 +18,8 @@ Pillow==10.4.0
 # better macOS native rendering, and included in the official Qt ecosystem.
 PySide6==6.7.2
 
+# ── PDF export ────────────────────────────────────────────────────────────────
+reportlab==4.2.5
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.2

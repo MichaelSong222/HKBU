@@ -1,16 +1,20 @@
 """
 side_metrics.py — Side-view postural metrics (beyond Cobb angles).
 
-Currently implements:
-  - Forward Head Position (craniovertebral angle)
+Implements:
+  - Cervical lordosis flexion angle (ear · C7_seg · vertical_top)
+    C7 is found as the back-most segmented pixel at the Y midpoint of the
+    ear→shoulder line, per the clinical protocol in:
+    https://www.researchgate.net/publication/384252294
+  - Forward Head Position (craniovertebral angle, legacy)
+  - Forward Head Distance (Kapandji model)
 
 All functions accept the raw MediaPipe landmark list returned by
-spine/pose_detector.py's detect_pose() and the image dimensions,
-so they can be called directly inside the pipeline without re-running
-MediaPipe.
+spine/pose_detector.py's detect_pose() and the image dimensions.
 """
 
 import math
+import numpy as np
 
 # Landmark index constants (MediaPipe 33-point schema, stable across API versions)
 _LEFT_EAR       = 7
@@ -107,7 +111,124 @@ def calculate_forward_head_position(
     }
 
 
-# ─── Forward Head Distance (FHD) ─────────────────────────────────────────────
+# ─── Cervical lordosis flexion angle ─────────────────────────────────────────
+
+def calculate_cervical_flexion(
+    lms,
+    facing_direction: str,
+    img_w: int,
+    img_h: int,
+    seg_mask: np.ndarray,
+) -> dict:
+    """
+    Cervical lordosis flexion angle via segmentation-based C7 localisation.
+
+    Method (Neck posture protocol):
+      1. Draw line from shoulder joint to ear.
+      2. Find the Y midpoint of that line.
+      3. At that Y, find the back-most (deepest) segmented pixel → C7.
+      4. Angle = ear · C7 · vertical_top
+         where vertical_top = (C7_x, C7_y - 100)  (point directly above C7)
+
+    Ranges (cervical spine flexion):
+      Healthy   : 20–40 °
+      Acceptable: 10–19 ° or 41–50 °
+      High risk : < 10 ° or > 50 °
+
+    Reference:
+      https://www.researchgate.net/publication/384252294_The_relationship_between_cervical_lordosis_and_neck_pain_a_systematic_review_and_meta-analysis
+
+    Parameters
+    ----------
+    lms            : MediaPipe raw landmark list
+    facing_direction : "right" | "left"
+    img_w, img_h   : image pixel dimensions
+    seg_mask       : binary uint8 mask (255 = person) from get_segmentation_mask()
+
+    Returns
+    -------
+    dict:
+        cervical_flexion_deg : float — angle at C7 between ear ray and vertical
+        c7_point             : (int, int) — pixel coords of C7 on back contour
+        ear_point            : (int, int) — pixel coords of ear
+        classification       : str — "Healthy" | "Acceptable" | "High Risk"
+        classification_key   : str — "normal" | "mild" | "severe"
+    """
+    _NULL = {
+        "cervical_flexion_deg": None,
+        "c7_point": None,
+        "ear_point": None,
+        "classification": "—",
+        "classification_key": None,
+    }
+
+    if lms is None or seg_mask is None:
+        return _NULL
+
+    # Select visible-side ear and shoulder
+    if facing_direction == "left":
+        ear_lm = lms[_RIGHT_EAR]
+        sh_lm  = lms[_RIGHT_SHOULDER]
+    else:
+        ear_lm = lms[_LEFT_EAR]
+        sh_lm  = lms[_LEFT_SHOULDER]
+
+    ear_x = ear_lm.x * img_w
+    ear_y = ear_lm.y * img_h
+    sh_x  = sh_lm.x  * img_w
+    sh_y  = sh_lm.y  * img_h
+
+    # Step 2: Y midpoint of shoulder→ear line
+    mid_y = int(round((ear_y + sh_y) / 2.0))
+    mid_y = max(0, min(seg_mask.shape[0] - 1, mid_y))
+
+    # Step 3: back-most pixel at mid_y
+    row = seg_mask[mid_y]
+    xs  = np.where(row > 0)[0]
+    if xs.size == 0:
+        return _NULL
+
+    if facing_direction == "left":
+        c7_x = int(xs[-1])   # facing left → back is on the right
+    else:
+        c7_x = int(xs[0])    # facing right → back is on the left
+
+    c7_pt = (c7_x, mid_y)
+
+    # Step 4: angle ear · C7 · vertical_top
+    # vertical_top is directly above C7
+    vert_top = (c7_x, mid_y - 100)
+
+    v1 = (ear_x - c7_x, ear_y - mid_y)          # C7 → ear
+    v2 = (vert_top[0] - c7_x, vert_top[1] - mid_y)  # C7 → vertical_top
+
+    len1 = math.hypot(*v1)
+    len2 = math.hypot(*v2)
+    if len1 < 1e-9 or len2 < 1e-9:
+        return _NULL
+
+    dot      = v1[0] * v2[0] + v1[1] * v2[1]
+    cos_val  = max(-1.0, min(1.0, dot / (len1 * len2)))
+    angle    = math.degrees(math.acos(cos_val))
+
+    # Classification
+    if 20.0 <= angle <= 40.0:
+        cls, cls_key = "Healthy (20–40°)", "normal"
+    elif (10.0 <= angle < 20.0) or (40.0 < angle <= 50.0):
+        cls, cls_key = "Acceptable (10–19° / 41–50°)", "mild"
+    else:
+        cls, cls_key = "High Risk (<10° or >50°)", "severe"
+
+    return {
+        "cervical_flexion_deg": round(angle, 2),
+        "c7_point":             c7_pt,
+        "ear_point":            (int(round(ear_x)), int(round(ear_y))),
+        "classification":       cls,
+        "classification_key":   cls_key,
+    }
+
+
+
 
 def _fhd_severity(fhd_inches: float) -> str:
     """Classify FHD into severity tiers per Kapandji biomechanical model."""
